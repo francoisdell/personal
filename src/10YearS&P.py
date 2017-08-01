@@ -25,18 +25,25 @@ import Model_Builder as mb
 
 load_from_file = True
 from collections import OrderedDict
+from typing import Union
+from lxml import etree
+import urllib
 
+returns_predict_years_forward = [9, 10, 12]
+recession_predict_years_forward = [1, 2, 3]
 selection_limit = 1.0e-2
 train_pct = 0.8
 start_dt = '1952-01-01'
 end_dt = datetime.today().strftime('%Y-%m-%d')
-
+interaction_type = 'level_1'
+use_pca = False
 real = False
 sp_field_name = 'sp500'
+recession_field_name = 'recession_usa'
+fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
+
 if real:
     sp_field_name += '_real'
-
-recession_field_name = 'recession_usa'
 
 #use the list to filter the local namespace
 safe_func_list = ['first', 'last', 'mean']
@@ -96,7 +103,7 @@ def get_closes(d: list, fld_names: list=['Close','col3']) -> pd.Series:
 # d = Pandas Dataframe
 # ys = [ [cols in the same y], [cols in the same y], [cols in the same y], .. ]
 # invert = [[True/False to invert y axis], [True/False to invert y axis], [True/False to invert y axis], ..]
-def chart(d, ys, invert, log_scale):
+def chart(d, ys, invert, log_scale, save_name=None, title=None):
 
     from itertools import cycle
     fig, ax = plt.subplots()
@@ -109,6 +116,7 @@ def chart(d, ys, invert, log_scale):
     extra_ys = len(axes[2:])
 
     # Make some space on the right side for the extra y-axes.
+    right_additive = 0
     if extra_ys>0:
         temp = 0.85
         if extra_ys<=2:
@@ -163,7 +171,14 @@ def chart(d, ys, invert, log_scale):
     labs = [l.get_label() for l in lns]
     axes[0].legend(lns, labs, loc=2)
 
+    if title:
+        plt.title(title)
+    else:
+        plt.title(list(itertools.chain(*ys))[0])
+
     plt.show()
+    if save_name:
+        fig.savefig(save_name)
 
 def get_obj_name(o) -> str:
     return [k for k, v in locals().items() if v is o][0]
@@ -201,11 +216,12 @@ def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, years_fo
     #################################
     y_field = OrderedDict([(forward_y_field_name, 'num')])
     x_fields = OrderedDict([(v, 'num') for v in x_names])
+    model_name = 'ridge'
     df = mb.predict(df
                     , x_fields=x_fields
                     , y_field=y_field
-                    , model_type='ridge'
-                    , report_name='sp500_ridge'
+                    , model_type=model_name
+                    , report_name='sp500_' + model_name
                     , show_model_tests=True
                     , retrain_model=True
                     , selection_limit=selection_limit
@@ -308,7 +324,9 @@ def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, years_fo
     chart(df
           , ys=[[forward_y_field_name, forward_y_field_name_pred, 'tsy_10yr_yield'], [y_field_name, y_field_name_pred]]
           , invert=[False, False]
-          , log_scale=[False, True])
+          , log_scale=[False, True]
+          , save_name='_'.join([forward_y_field_name_pred, model_name, str(years_forward)])
+          , title='_'.join([forward_y_field_name_pred, model_name, str(years_forward)]))
 
     return OrderedDict(((forward_y_field_name, df[forward_y_field_name])
         , (forward_y_field_name_pred, df[forward_y_field_name_pred])
@@ -316,7 +334,7 @@ def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, years_fo
 
 
 
-def predict_recession(df: pd.DataFrame, x_names: list, y_field_name: str, years_forward: int, prune: bool=False) \
+def predict_recession(df: pd.DataFrame, x_names: list, y_field_name: str, years_forward: int, prune: bool=False, model_name='gbc') \
         -> OrderedDict:
 
     print("\n-----------------------"
@@ -342,11 +360,12 @@ def predict_recession(df: pd.DataFrame, x_names: list, y_field_name: str, years_
     #################################
     y_field = OrderedDict([(forward_y_field_name, 'cat')])
     x_fields = OrderedDict([(v, 'num') for v in x_names])
+
     df = mb.predict(df
                     , x_fields=x_fields
                     , y_field=y_field
-                    , model_type='gbc'
-                    , report_name='recession_gbc'
+                    , model_type=model_name
+                    , report_name='recession_' + model_name
                     , show_model_tests=True
                     , retrain_model=True
                     , selection_limit=selection_limit
@@ -370,7 +389,9 @@ def predict_recession(df: pd.DataFrame, x_names: list, y_field_name: str, years_
     chart(df
           , ys=[['sp500'], [y_field_name, y_field_name_pred]]
           , invert=[False, False]
-          , log_scale=[True, False])
+          , log_scale=[True, False]
+          , save_name='_'.join([forward_y_field_name_pred, model_name])
+          , title='_'.join([forward_y_field_name_pred, model_name]))
 
     return OrderedDict(((forward_y_field_name, df[forward_y_field_name])
         , (forward_y_field_name_pred, df[forward_y_field_name_pred])
@@ -424,18 +445,18 @@ def predict_ensemble(df: pd.DataFrame, x_names: list, y_field_name: str, prune: 
 
     #################################
 
-    df = df.reindex(pd.DatetimeIndex(start=df.index.min(), end=max(df.index), freq='1Q'))
-    chart(df
-          , ys=[[y_field_name, *list(result_field_dict.keys())]]
-          , invert=[False]
-          , log_scale=[True])
+        df = df.reindex(pd.DatetimeIndex(start=df.index.min(), end=max(df.index), freq='1Q'))
+        chart(df
+              , ys=[[y_field_name, *list(result_field_dict.keys())]]
+              , invert=[False]
+              , log_scale=[True]
+              , save_name='_'.join([y_field_name_pred, model_name])
+              , title='_'.join([y_field_name_pred, model_name]))
 
     return result_field_dict
 
-fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
-
 class data_source:
-    def __init__(self, code: str, provider: str):
+    def __init__(self, code: str, provider: Union[str, function]):
         self.code = code
         self.data = None
 
@@ -506,6 +527,24 @@ def calc_equity_alloc() -> pd.Series:
     )
     return make_qtrly(equity_alloc, 'last')
 
+def get_margin_debt() -> pd.Series:
+    web = urllib.urlopen("http://www.nyxdata.com/nysedata/asp/factbook/viewer_edition.asp?mode=tables&key=50&category=8")
+    s = web.read()
+
+    html = etree.HTML(s)
+
+    ## Get all 'tr'
+    tr_nodes = html.xpath('//table[@class="border"]/tbody')
+
+
+    ## 'th' is inside first 'tr'
+    header = [i[0].text for i in tr_nodes[0].xpath("//u")]
+
+    ## Get text from rest all 'tr'
+    td_content = [[td.text for td in tr.xpath('//td')] for tr in tr_nodes[1:]]
+    return make_qtrly(ds, 'last')
+
+
 data_sources = dict()
 data_sources['cpi_urb_nonvol'] = data_source('CPILFESL', 'fred')
 data_sources['netexp_nom'] = data_source('NETEXP', 'fred')
@@ -547,7 +586,7 @@ ds_names = [k for k in data_sources.keys()]
 
 try:
     if load_from_file:
-        with open('src/sp500_hist.p', 'rb') as f:
+        with open('sp500_hist.p', 'rb') as f:
             (data_sources_temp,) = pickle.load(f)
             for k in data_sources.keys():
                 if k not in data_sources_temp:
@@ -567,7 +606,7 @@ except Exception as e:
         ds.collect_data()
         data_sources[k] = ds
 
-with open('src/sp500_hist.p', 'wb') as f:
+with open('sp500_hist.p', 'wb') as f:
     pickle.dump((data_sources,), f)
 
 
@@ -722,7 +761,8 @@ def convert_to_pca(pca_df: pd.DataFrame, field_names: list):
     return x_names_pca
 
 # UNCOMMENT IF YOU WANT TO UTILIZE PCA
-x_names = convert_to_pca(df, x_names)
+if use_pca:
+    x_names = convert_to_pca(df, x_names)
 
 import operator
 def get_operator_fn(op):
@@ -741,9 +781,28 @@ def permutations_with_replacement(n, k):
     for p in itertools.product(n, repeat=k):
         yield p
 
-import random
-print('Adding interaction terms.')
-new_x_names = []
+
+
+# Construct level 1 interactions between all x-variables
+def get_level1_interactions(x_names):
+    print('Adding interaction terms.')
+    new_x_names = []
+    for k, v in enumerate(x_names[:-1]):
+        for v1 in x_names[k + 1:]:
+            corr = np.corrcoef(df[v], df[v1])[0][1]
+            if abs(corr) <= 0.75:
+                # Interactions between two different fields generated through multiplication
+                interaction_field_name = '{0}_*_{1}'.format(v, v1)
+                df[interaction_field_name] = df[v] * df[v1]
+                new_x_names.append(interaction_field_name)
+
+                # Interactions between two different fields, generated through division
+                interaction_field_name = '{0}_/_{1}'.format(v, v1)
+                df[interaction_field_name] = df[v] / df[v1].replace({0: np.nan})
+                new_x_names.append(interaction_field_name)
+    return new_x_names
+
+# Construct all possible interactions between x-variables
 def get_all_interactions(new_names: list, curr_name: str=None, series: pd.Series=None):
     if new_names:
         next_name = new_names[0]
@@ -762,8 +821,17 @@ def get_all_interactions(new_names: list, curr_name: str=None, series: pd.Series
                 get_all_interactions(new_names=new_names[1:], curr_name=curr_name, series=series)
         get_all_interactions(new_names=new_names[1:])
 
-get_all_interactions(x_names)
-x_names.extend(new_x_names)
+# Perform the addition of the interaction terms
+print('Adding interaction terms.')
+if interaction_type == 'all':
+    new_x_names = []
+    get_all_interactions(x_names)
+    x_names.extend(new_x_names)
+
+elif interaction_type == 'level_1':
+
+    x_names.extend(get_level1_interactions(x_names))
+
 
 # CREATE CORRELATION MATRIX AND
 
@@ -789,23 +857,6 @@ x_names.extend(new_x_names)
 #                 df[new_name] = new_series
 # x_names.extend(new_x_names)
 
-# print('Adding interaction terms.')
-# new_x_names = []
-# for k, v in enumerate(x_names[:-1]):
-#     for v1 in x_names[k+1:]:
-#         corr = np.corrcoef(df[v], df[v1])[0][1]
-#         if abs(corr) <= 0.75:
-#             # Interactions between two different fields generated through multiplication
-#             interaction_field_name = '{0}_times_{1}'.format(v, v1)
-#             df[interaction_field_name] = df[v] * df[v1]
-#             new_x_names.append(interaction_field_name)
-#
-#             # Interactions between two different fields, generated through division
-#             interaction_field_name = '{0}_div_{1}'.format(v, v1)
-#             df[interaction_field_name] = df[v] / df[v1].replace({0: np.nan})
-#             new_x_names.append(interaction_field_name)
-# x_names.extend(new_x_names)
-
 print('Converting fields to EWMA fields.')
 new_x_names = []
 for v in x_names:
@@ -824,6 +875,7 @@ x_names = new_x_names
 # IMPUTE VALUES!!!
 df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names])
 
+# Generate all possible combinations of the imput variables.
 new_x_names = []
 operations = [('pow2', math.pow, (2,)), ('sqrt', math.sqrt, None)]
 for suffix, op, var in operations:
@@ -832,6 +884,8 @@ for suffix, op, var in operations:
         df[new_x_name] = df[v].abs().apply(op, args=var) * df[v].apply(lambda x: -1 if x < 0 else 1)
         new_x_names.append(new_x_name)
 x_names.extend(new_x_names)
+
+
 
 def get_diff_std_and_flags(df: pd.DataFrame
                            , field_name: str
@@ -887,11 +941,10 @@ df[sp500_qtr_since_last_corr] = time_since_last_true(df[new_x_names[-1]])
 
 # df_valid = df.loc[~train_mask, :]
 # predict_years_forward = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-predict_years_forward = [9]
 
 ensemble_df = pd.DataFrame(df[sp_field_name], index=df.index, columns=[sp_field_name])
 ensemble_x_names = list()
-for yf in predict_years_forward:
+for yf in returns_predict_years_forward:
     d = predict_returns(df, x_names, sp_field_name, yf, prune=True)
     for k,v in d.items():
         df[k] = v
@@ -905,21 +958,25 @@ for yf in predict_years_forward:
     ensemble_df = ensemble_df.join(new_df, how='right')
     ensemble_x_names.append(new_field_name)
 
-recession_predict_years_forward = [1, 2, 3]
-for yf in recession_predict_years_forward:
-    d = predict_recession(df, x_names, recession_field_name, yf, prune=True)
-    for k,v in d.items():
-        df[k] = v
-
-    new_dataset = [v for v in d.values()][-1]
-    new_field_name = 'recession_{0}yr'.format(yf)
-
-    # print(ensemble_df.index)
-    # print(new_dataset.index)
-    new_df = new_dataset.to_frame(name=new_field_name)
-
 # Use the results of the various forward prediction models to construct an ensemble model!!!
 ensemble_mask = [x >= 5 for x in ensemble_df.loc[:, ensemble_x_names].count(axis=1).values]
 # ensemble_mask = ensemble_mask.values.tolist() + [True for v in range(ensemble_df.shape[0] - non_null_mask.shape[0])]
 ensemble_df = ensemble_df.loc[ensemble_mask, :]
 # d = predict_ensemble(ensemble_df, ensemble_x_names, sp_field_name)
+
+
+# RECESSION PREDICTIONS
+for yf in recession_predict_years_forward:
+    for m in ['gbc','abc','neural_c']:
+        d = predict_recession(df, x_names, recession_field_name, yf, prune=True, model_name=m)
+        for k,v in d.items():
+            df[k] = v
+
+        new_dataset = [v for v in d.values()][-1]
+        new_field_name = 'recession_{0}yr'.format(yf)
+
+        # print(ensemble_df.index)
+        # print(new_dataset.index)
+        new_df = new_dataset.to_frame(name=new_field_name)
+
+
