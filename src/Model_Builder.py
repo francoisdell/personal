@@ -27,11 +27,20 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.linear_model import Lasso
 from sklearn.linear_model import ElasticNet
 from sklearn.linear_model.logistic import LogisticRegression as logr
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neighbors import KNeighborsRegressor
+from sklearn.cluster import k_means as kmeans
 from sklearn.ensemble import RandomForestClassifier as rfor
 from sklearn.ensemble import GradientBoostingClassifier as gbc
 from sklearn.ensemble import GradientBoostingRegressor as gbr
 from sklearn.ensemble import AdaBoostClassifier as abc
 from sklearn.linear_model import LinearRegression as linreg
+from sklearn.linear_model import RidgeClassifier
+from sklearn.svm import LinearSVC
+from sklearn.linear_model import SGDClassifier
+from sklearn.linear_model import PassiveAggressiveClassifier
+from sklearn.naive_bayes import BernoulliNB, MultinomialNB
+from sklearn.neighbors import NearestCentroid
 from sklearn.svm import SVC as svc
 from sklearn.svm import SVR as svr
 from sklearn.metrics import r2_score
@@ -195,6 +204,24 @@ def predict(df: pd.DataFrame
                 use_sparse = False
             elif mt == 'abc':
                 clf = abc(random_state=555, n_estimators=int(round(x_train.shape[0]/20, 0)))
+            elif mt == 'knn_c':
+                clf = KNeighborsClassifier()
+            elif mt == 'knn_r':
+                clf = KNeighborsRegressor()
+            elif mt == 'ridge_c':
+                clf = RidgeClassifier()
+            elif mt == 'linear_svc':
+                clf = LinearSVC()
+            elif mt == 'sgd_c':
+                clf = SGDClassifier()
+            elif mt == 'pass_agg_c':
+                clf = PassiveAggressiveClassifier()
+            elif mt == 'bernoulli_nb':
+                clf = BernoulliNB()
+            elif mt == 'multinomial_nb':
+                clf = MultinomialNB()
+            elif mt == 'nearest_centroid':
+                clf = NearestCentroid()
             else:
                 raise ValueError('Incorrect model_type given. Cannot match [%s] to a model.' % mt)
 
@@ -203,7 +230,7 @@ def predict(df: pd.DataFrame
 
             print("\n----- Training Predictive Model -----")
 
-            if isinstance(clf, (ridge, Lasso)):
+            if isinstance(clf, (ridge, Lasso, SGDClassifier)):
                 # load the diabetes datasets
                 # prepare a range of alpha values to test
                 alphas = np.array([100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0])
@@ -212,11 +239,37 @@ def predict(df: pd.DataFrame
                 grid.fit(x_train, y_train)
                 print(grid)
                 # summarize the results of the grid search
-                print('Ridge Regression Best Score:', grid.best_score_)
-                print('Ridge Regression Best Alpha:', grid.best_estimator_.alpha)
+                print('KNN Regression Best Score:', grid.best_score_)
+                print('KNN Regression Best Alpha:', grid.best_estimator_.alpha)
                 clf.alpha = grid.best_estimator_.alpha
 
-            elif selection_limit < 1.0:
+            if isinstance(clf, (LinearSVC, RidgeClassifier)):
+                # load the diabetes datasets
+                # prepare a range of alpha values to test
+                tols = np.array([100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0])
+                # create and fit a ridge regression model, testing each alpha
+                grid = GridSearchCV(estimator=clf, param_grid={'tol': tols})
+                grid.fit(x_train, y_train)
+                print(grid)
+                # summarize the results of the grid search
+                print('KNN Regression Best Score:', grid.best_score_)
+                print('KNN Regression Best Alpha:', grid.best_estimator_.tol)
+                clf.alpha = grid.best_estimator_.tol
+
+            if isinstance(clf, (KNeighborsClassifier, KNeighborsRegressor)):
+                # load the diabetes datasets
+                # prepare a range of alpha values to test
+                neighbors = np.array([3, 4, 5, 6, 7, 8, 9, 10])
+                # create and fit a ridge regression model, testing each alpha
+                grid = GridSearchCV(estimator=clf, param_grid={'n_neighbors': neighbors})
+                grid.fit(x_train, y_train)
+                print(grid)
+                # summarize the results of the grid search
+                print('{0} Regression Best Score: {1}'.format(mt, grid.best_score_))
+                print('{0} Regression Best Score: {1}'.format(mt, grid.best_estimator_.n_neighbors))
+                clf.n_neighbors = grid.best_estimator_.n_neighbors
+
+            if selection_limit < 1.0:
                 scores, p_vals = sk_feat_sel.f_regression(x_train, y_train, center=False)
                 for x_field_name in list(x_fields.keys()):
                     xcol_indices = [idx for idx, vals in enumerate(x_columns) if vals[2] == x_field_name]
