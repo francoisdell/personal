@@ -527,7 +527,22 @@ def calc_equity_alloc() -> pd.Series:
     )
     return make_qtrly(equity_alloc, 'last')
 
+def get_nyse_margin_debt() -> pd.Series:
+    url = 'http://www.nyxdata.com/nysedata/asp/factbook/table_export_csv.asp?mode=tables&key=50'
+    with requests.Session() as s:
+        download = s.get(url=url)
+
+    strio = io.StringIO(download.text)
+    df = pd.read_table(strio, sep='\\t', skiprows=3)
+
+    print(df)
+
+    df['End of month'] = pd.DatetimeIndex(pd.to_datetime(df['End of month'])).to_period('M').to_timestamp('M')
+    df.set_index(['End of month'], inplace=True, drop=True)
+    print(df)
+
 def get_margin_debt() -> pd.Series:
+
     web = urllib.urlopen("http://www.nyxdata.com/nysedata/asp/factbook/viewer_edition.asp?mode=tables&key=50&category=8")
     s = web.read()
 
