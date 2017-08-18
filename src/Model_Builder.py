@@ -9,7 +9,7 @@ from typing import Union
 from math import exp
 import math
 import Settings
-from collections import OrderedDict
+# from collections import OrderedDict
 import numpy as np
 import prettytable
 import pandas as pd
@@ -24,7 +24,8 @@ from sklearn.neural_network import MLPClassifier as cmlp
 from sklearn.neural_network import MLPRegressor as rmlp
 from sklearn.linear_model import Ridge as ridge
 from sklearn.model_selection import GridSearchCV
-
+from sklearn.linear_model import Lasso
+from sklearn.linear_model import ElasticNet
 from sklearn.linear_model.logistic import LogisticRegression as logr
 from sklearn.ensemble import RandomForestClassifier as rfor
 from sklearn.ensemble import GradientBoostingClassifier as gbc
@@ -43,9 +44,9 @@ global use_sparse, verbose
 use_sparse=True
 
 def predict(df: pd.DataFrame
-            , x_fields: OrderedDict
-            , y_field: OrderedDict
-            , model_type: str
+            , x_fields: dict
+            , y_field: dict
+            , model_type: Union[str, list]
             , report_name: str
             , show_model_tests: bool=False
             , retrain_model: bool=False
@@ -54,23 +55,29 @@ def predict(df: pd.DataFrame
             , verbose: bool=True
             , train_pct: float=0.7
             , random_train_test: bool=True
+            , max_train_size: int=50000
             ) -> pd.DataFrame:
 
 
     globals()['verbose'] = verbose
-    reportName = report_name
-    final_file_dir = Settings.default_base_dir + '/%s%s' % (reportName, Settings.default_data_dir)
-    os.makedirs(final_file_dir, exist_ok=True)
+    globals()['Settings'] = Settings.Settings(report_name)
+    global Settings
+    final_file_dir = Settings.get_default_data_dir()
+    # os.makedirs(final_file_dir, exist_ok=True)
 
-    model_dir = '%s/%s/' % (Settings.default_model_dir, reportName)
-    os.makedirs(model_dir, exist_ok=True)
+    model_dir = Settings.get_model_dir()
+    # os.makedirs(model_dir, exist_ok=True)
 
-    if not isinstance(model_type, str) and hasattr(model_type, 'fit'):
-        clf = model_type
-        model_type = 'custom'
-    predictive_model_file = '%s%s' % (model_dir, 'predictive_model_%s.p' % model_type)
+    global use_sparse
+    if not isinstance(model_type, list):
+        model_type = [model_type]
 
-    mappings_file = '%s%s' % (model_dir, 'data_mappings.p')
+    predictive_model_file = '{0}\predictive_model_{1}.p'\
+        .format(model_dir,
+                model_type[0] if len(model_type) == 1 else 'stacked'
+                )
+
+    mappings_file = '%s\%s' % (model_dir, 'data_mappings.p')
 
     for k in list(y_field.keys()):
         df[k].replace('', np.nan, inplace=True)
@@ -87,8 +94,8 @@ def predict(df: pd.DataFrame
 
         mask_train_test_qty_true = mask_train_test.value_counts().loc[True]
 
-        train_pct = min(train_pct, 50000 / (len(df[k]) - mask_train_test_qty_true))
-        test_pct = min((1-train_pct), 50000 / (len(df[k]) - mask_train_test_qty_true))
+        train_pct = min(train_pct, max_train_size / (len(df[k]) - mask_train_test_qty_true))
+        test_pct = min((1-train_pct), max_train_size / (len(df[k]) - mask_train_test_qty_true))
 
         if verbose:
             print("Train data fraction:", train_pct)
@@ -96,8 +103,8 @@ def predict(df: pd.DataFrame
 
         if random_train_test:
             mask = np.random.rand(len(df[k]))
-            mask_train = [a and b for a, b in zip(mask <= train_pct, mask_train_test == 0)]
-            mask_test = [a and b for a, b in zip(mask > (1-test_pct), mask_train_test == 0)]
+            mask_train = [a and b for a, b in zip(mask <= train_pct, mask_train_test != False)]
+            mask_test = [a and b for a, b in zip(mask > (1-test_pct), mask_train_test != False)]
         else:
             mask_train = mask_train_test.copy()
             mask_test = mask_train_test.copy()
@@ -118,9 +125,9 @@ def predict(df: pd.DataFrame
         if retrain_model:
             raise ValueError('"retrain_model" variable is set to True. Training new preprocessing & predictive models.')
         with open(mappings_file, 'rb') as pickle_file:
-            (x_mappings, y_mappings) = pickle.load(pickle_file)
+            x_mappings, y_mappings = pickle.load(pickle_file)
         with open(predictive_model_file, 'rb') as pickle_file:
-            (clf,) = pickle.load(pickle_file)
+            clf, = pickle.load(pickle_file)
         print('Successfully loaded the mappings and predictive model.')
     except (FileNotFoundError, ValueError) as e:
         print(e)
@@ -132,93 +139,154 @@ def predict(df: pd.DataFrame
             if v == 'cat':
                 y_field[k] = df[k].unique().astype(str)
 
-        x_mappings = train_models(df[mask_train], x_fields)
         y_mappings = train_models(df[mask_train], y_field)
-        with open(mappings_file, 'wb') as pickle_file:
-            pickle.dump((x_mappings, y_mappings), pickle_file)
+        _, y_train, y_mappings = get_vectors(df[mask_train], y_field, y_mappings, is_y=True)
 
+        x_mappings = train_models(df[mask_train], x_fields)
         x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
-        y_train, y_mappings = get_vectors(df[mask_train], y_field, y_mappings, is_y=True)
-
-        # print(x_train.shape)
-        if verbose:
-            print('FIELDS\n', np.asarray(list(x_fields.keys())))
-        # y_train, uniques_index = pd.factorize(train[y_fields])
-        global use_sparse
-        if model_type == 'custom':
-            clf = clf
-            if isinstance(clf, (gbr)):
-                use_sparse = False
-        elif model_type == 'rfor':
-            clf = rfor(random_state=555, verbose=True, n_estimators=31)
-        elif model_type == 'logit':
-            clf = logr(random_state=555, verbose=True)
-        elif model_type == 'linreg':
-            clf = linreg()
-        elif model_type == 'ridge':
-            clf = ridge(random_state=555)
-        elif model_type == 'neural_c':
-            clf = cmlp(random_state=555, verbose=True, learning_rate_init=0.1, learning_rate='adaptive'
-                       # , max_iter=int(round(x_train.shape[0]/2000, 0))
-                       )
-        elif model_type == 'neural_r':
-            clf = rmlp(random_state=555, verbose=True, learning_rate_init=0.1, learning_rate='adaptive'
-                       # , max_iter=int(round(x_train.shape[0]/2000, 0))
-                       )
-        elif model_type == 'svc':
-            clf = svc(random_state=555, verbose=True, kernel='rbf', probability=True, max_iter=1000)
-        elif model_type == 'svr_lin':
-            clf = svr(verbose=True, kernel='linear', max_iter=1000)
-        elif model_type == 'svr_rbf':
-            clf = svr(verbose=True, kernel='rbf', max_iter=1000)
-        elif model_type == 'gbc':
-            clf = gbc(random_state=555, verbose=True, n_estimators=int(round(x_train.shape[0]/20, 0)))
-        elif model_type == 'gbr':
-            clf = gbr(random_state=555, verbose=True, n_estimators=int(round(x_train.shape[0] / 20, 0)))
-            use_sparse=False
-        elif model_type == 'abc':
-            clf = abc(random_state=555, n_estimators=int(round(x_train.shape[0]/20, 0)))
-        else:
-            raise ValueError('Incorrect model_type given. Cannot match [%s] to a model.' % model_type)
-
-        # print("NaN in x_train: %s" % np.isnan(x_train.data).any())
-        # print("NaN in y_train: %s" % np.isnan(y_train.data).any())
         x_train = fix_np_nan(x_train)
 
-        print("\n----- Training Predictive Model -----")
+        mask_all = np.asarray([True for v in range(df.shape[0])], dtype=np.bool)
+        for idx, mt in enumerate(model_type):
+
+            # print(x_train.shape)
+            if verbose:
+                print('FIELDS\n', np.asarray(list(x_fields.keys())))
+            # y_train, uniques_index = pd.factorize(train[y_fields])
+
+            if not isinstance(mt, str) and hasattr(mt, 'fit'):
+                clf = mt
+                model_type[idx], mt = ('custom', 'custom')
+                if isinstance(clf, (gbr)):
+                    use_sparse = False
+            elif mt == 'rfor':
+                clf = rfor(random_state=555, verbose=True, n_estimators=31, class_weight='balanced')
+            elif mt == 'logit':
+                clf = logr(random_state=555, verbose=True, class_weight='balanced')
+            elif mt == 'linreg':
+                clf = linreg()
+            elif mt == 'ridge':
+                clf = ridge(random_state=555)
+            elif mt == 'lasso':
+                clf = Lasso(random_state=555)
+            elif mt == 'elastic_net':
+                clf = ElasticNet(random_state=555, positive=True)  # Used positive=True to make this ideal for stacking
+            elif mt == 'elastic_net_stacking':
+                clf = ElasticNet(random_state=555, positive=True)  # Used positive=True to make this ideal for stacking
+            elif mt == 'neural_c':
+                clf = cmlp(random_state=555, verbose=True, learning_rate_init=0.1, learning_rate='adaptive'
+                           # , max_iter=int(round(x_train.shape[0]/2000, 0))  ## Will cause failure to converge
+                           )
+            elif mt == 'neural_r':
+                clf = rmlp(random_state=555, verbose=True, learning_rate_init=0.1, learning_rate='adaptive'
+                           # , max_iter=int(round(x_train.shape[0]/2000, 0))  ## Will cause failure to converge
+                           )
+            elif mt == 'svc':
+                clf = svc(random_state=555, verbose=True, kernel='rbf', probability=True, max_iter=1000
+                          , class_weight='balanced')
+            elif mt == 'svr_lin':
+                clf = svr(verbose=True, kernel='linear', max_iter=1000)
+            elif mt == 'svr_rbf':
+                clf = svr(verbose=True, kernel='rbf', max_iter=1000)
+            elif mt == 'gbc':
+                clf = gbc(random_state=555, verbose=True, n_estimators=int(round(x_train.shape[0]/20, 0)))
+            elif mt == 'gbr':
+                clf = gbr(random_state=555, verbose=True, n_estimators=int(round(x_train.shape[0] / 20, 0)))
+                use_sparse = False
+            elif mt == 'abc':
+                clf = abc(random_state=555, n_estimators=int(round(x_train.shape[0]/20, 0)))
+            else:
+                raise ValueError('Incorrect model_type given. Cannot match [%s] to a model.' % mt)
+
+            # print("NaN in x_train: %s" % np.isnan(x_train.data).any())
+            # print("NaN in y_train: %s" % np.isnan(y_train.data).any())
+
+            print("\n----- Training Predictive Model -----")
+
+            if isinstance(clf, (ridge, Lasso)):
+                # load the diabetes datasets
+                # prepare a range of alpha values to test
+                alphas = np.array([100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0])
+                # create and fit a ridge regression model, testing each alpha
+                grid = GridSearchCV(estimator=clf, param_grid=dict(alpha=alphas))
+                grid.fit(x_train, y_train)
+                print(grid)
+                # summarize the results of the grid search
+                print('Ridge Regression Best Score:', grid.best_score_)
+                print('Ridge Regression Best Alpha:', grid.best_estimator_.alpha)
+                clf.alpha = grid.best_estimator_.alpha
+
+            elif selection_limit < 1.0:
+                scores, p_vals = sk_feat_sel.f_regression(x_train, y_train, center=False)
+                for x_field_name in list(x_fields.keys()):
+                    xcol_indices = [idx for idx, vals in enumerate(x_columns) if vals[2] == x_field_name]
+                    if all(p_vals[idx] > selection_limit or p_vals[idx] == np.nan for idx in xcol_indices):
+                        x_fields.pop(x_field_name)
+
+                x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
+
+                x_train = fix_np_nan(x_train)
+
+            clf.fit(x_train, y_train)
+            print("------ Model Training Complete ------\n")
 
 
+            # Loop until you reach the very last predictive model, iteratively adding the predictions from each model
+            #  to the dataframe and including those predictions in each successive model training process
+            if idx < len(model_type)-1:
+                max_slice_size = 100000
+                y_all = list()
+                # y_all_probs = list()
+                for s in range(0, int(math.ceil(len(df.index) / max_slice_size))):
+                    min_idx = s * max_slice_size
+                    max_idx = min(len(df.index), (s + 1) * max_slice_size)
+                    print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
 
-        if selection_limit < 1.0:
-            scores, p_vals = sk_feat_sel.f_regression(x_train, y_train, center=False)
-            for k, v in enumerate([v[0] for v in x_columns]):
-                if '_isnull' not in v: # ignore the isnull values
-                    if p_vals[k] > selection_limit or p_vals[k] == np.nan:
-                        x_fields.pop(v[:-2] if v[-2:] == '_t' else v)
+                    df_valid_iter = df[mask_all].iloc[min_idx:max_idx]
+                    x_valid_columns, x_all, x_mappings = get_vectors(df_valid_iter, x_fields, x_mappings)
+                    x_all = fix_np_nan(x_all)
 
-            x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
-            x_train = fix_np_nan(x_train)
+                    # print(x_validate)
 
-        if isinstance(clf, ridge):
-            # load the diabetes datasets
-            # prepare a range of alpha values to test
-            alphas = np.array([100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0.000001, 0])
-            # create and fit a ridge regression model, testing each alpha
-            grid = GridSearchCV(estimator=clf, param_grid=dict(alpha=alphas))
-            grid.fit(x_train, y_train)
-            print(grid)
-            # summarize the results of the grid search
-            print('Ridge Regression Best Score:', grid.best_score_)
-            print('Ridge Regression Best Alpha:', grid.best_estimator_.alpha)
-            clf.alpha = grid.best_estimator_.alpha
+                    try:
+                        preds = clf.predict(x_all)
+                        # if hasattr(clf, 'classes_'):
+                        #     pred_probs = clf.predict_proba(x_all)
+                    except TypeError as e:
+                        if "dense data is required" in str(e):
+                            x_all = x_all.toarray()
+                            use_sparse = False
+                            preds = clf.predict(x_all)
+                            pass
+                    except DeprecationWarning as e:
+                        print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
+                        print(e)
+                        x_all = x_all.reshape(-1, 1)
+                        preds = clf.predict(x_all)
+                        # if hasattr(clf, 'classes_'):
+                        #     pred_probs = clf.predict_proba(x_all)
+                        pass
+                    finally:
+                        y_all.append(preds)
 
-            x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
+                # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
+                y_all = np.hstack(y_all)
 
-            x_train = fix_np_nan(x_train)
-
-        clf.fit(x_train, y_train)
-
-        print("------ Model Training Complete ------\n")
+                # Generate predictions for this predictive model, for all values. Add them to the DF so they can be
+                #  used as predictor variables (e.g. "stacked" upon) later when the next predictive model is run.
+                for k, v in y_field.items():
+                    preds = y_mappings[k].inverse_transform(y_all)
+                    print('INTERMEDIATE PREDICTIONS')
+                    print(*preds[:10])
+                    pred_x_name = '{0}_pred_{1}'.format(mt, k)
+                    df.loc[:, pred_x_name] = preds
+                    new_x_fields = {pred_x_name: list(y_field.values())[-1]}
+                    x_fields = {**x_fields, **new_x_fields}
+                    x_mappings = {**x_mappings, **train_models(df[mask_train], new_x_fields)}
+                    new_x_columns, new_x_train, x_mappings = get_vectors(df[mask_train], new_x_fields, x_mappings)
+                    x_columns += new_x_columns
+                    new_x_train = fix_np_nan(new_x_train)
+                    x_train = matrix_hstack((x_train, new_x_train))
 
         try:
             with open(predictive_model_file, 'wb') as pickle_file:
@@ -226,14 +294,17 @@ def predict(df: pd.DataFrame
         except AttributeError:
             pass
 
+        with open(mappings_file, 'wb') as pickle_file:
+            pickle.dump((x_mappings, y_mappings), pickle_file)
+
     if show_model_tests:
         x_columns, x_test, x_mappings = get_vectors(df[mask_test], x_fields, x_mappings)
-        y_test, y_mappings = get_vectors(df[mask_test], y_field, y_mappings, is_y=True)
+        _, y_test, y_mappings = get_vectors(df[mask_test], y_field, y_mappings, is_y=True)
         x_test = fix_np_nan(x_test)
 
         print("Total Named Columns: ", len(x_columns))
 
-        coef_list = [['name'] + [v.strip() for v, b in x_columns]]
+        coef_list = [['name'] + [new_colname.strip() for new_colname, show, orig_colname in x_columns]]
 
         if hasattr(clf, 'feature_importances_'):
             feat_importances = ['coef'] + fix_np_nan(clf.feature_importances_).tolist()
@@ -272,7 +343,7 @@ def predict(df: pd.DataFrame
             nonzero_coefs_mask = [v != 0 for v in coefs]
             significant_coefs_mask = [v <= selection_limit for v in p_vals]
 
-            print_df = pd.DataFrame(list(zip([v1 for v1, v2 in x_columns]
+            print_df = pd.DataFrame(list(zip([v[0] for v in x_columns]
                                             , coefs
                                             , scores.tolist()
                                             , p_vals.tolist()))
@@ -379,10 +450,10 @@ def predict(df: pd.DataFrame
             print('CLASSES')
             print(clf.classes_)
             print('ACCURACY:\n', metrics.accuracy_score(y_test, preds))
-            prediction_probs = clf.predict_proba(x_test)
+            y_test_probs = clf.predict_proba(x_test)
             try:
-                if prediction_probs.shape[1] <= 2:
-                    print('ROC-CURVE AOC', metrics.roc_auc_score(y_test, prediction_probs[:, 1]))
+                if y_test_probs.shape[1] <= 2:
+                    print('ROC-CURVE AOC', metrics.roc_auc_score(y_test, y_test_probs[:, 1]))
             except ValueError as e:
                 print(e)
                 pass
@@ -394,7 +465,7 @@ def predict(df: pd.DataFrame
             # preds = [list(y_mappings.values())[index][values] for index, values in enumerate(preds)]
 
             print("PREDICTION PROBABILITIES")
-            print(prediction_probs)
+            print(y_test_probs)
 
             for k, v in y_field.items():
                 preds_str = resilient_inverse_transform(y_mappings[k], preds)
@@ -417,6 +488,7 @@ def predict(df: pd.DataFrame
     # ITERATE OVER THE df_validate in groups of 100K rows (to avoid memory errors) and predict outcomes
     max_slice_size = 100000
     y_validate = list()
+    y_validate_probs = list()
     for s in range(0, int(math.ceil(len(df_validate.index)/max_slice_size))):
         min_idx = s*max_slice_size
         max_idx = min(len(df_validate.index), (s+1)*max_slice_size)
@@ -431,39 +503,46 @@ def predict(df: pd.DataFrame
 
         try:
             preds = clf.predict(x_validate)
+            if hasattr(clf, 'classes_'):
+                pred_probs = clf.predict_proba(x_validate)
         except TypeError as e:
             if "dense data is required" in str(e):
                 x_validate = x_validate.toarray()
-                use_sparse = True
+                use_sparse = False
                 preds = clf.predict(x_validate)
+                if hasattr(clf, 'classes_'):
+                    pred_probs = clf.predict_proba(x_validate)
                 pass
         except DeprecationWarning as e:
             print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
             print(e)
-            preds = clf.predict(x_validate.reshape(-1, 1))
+            x_validate = x_validate.reshape(-1, 1)
+            preds = clf.predict(x_validate)
+            if hasattr(clf, 'classes_'):
+                pred_probs = clf.predict_proba(x_validate)
             pass
+
+        if hasattr(clf, 'classes_'):
+            y_validate_probs.append(pred_probs)
+
         y_validate.append(preds)
-
-
-    if hasattr(clf, 'classes_'):
-        prediction_probs = list()
-        for s in range(0, int(math.ceil(len(df_validate.index)/max_slice_size))):
-            prediction_probs.append(clf.predict_proba(x_validate))
-        prediction_probs = np.vstack(prediction_probs)
-        print('ORIGINAL PROBABILITIES')
-        print(*prediction_probs[:10].round(4), sep='\n')
-        print('ORIGINAL PROBABILITIES (NORMALIZED)')
-        print(*[np.around(np.expm1(x), 4) for x in prediction_probs][:10], sep='\n')
-
-        for m in y_mappings.values():
-            df_probs = pd.DataFrame(data=prediction_probs.round(4)
-                            , columns=['prob_' + f.lower() for f in list(m.classes_)[:prediction_probs.shape[1]]]
-                            , index=df_validate.index)
-            # df_validate.reset_index(inplace=True, drop=True)
-            df_validate = df_validate.join(df_probs, how='inner')
 
     # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
     y_validate = np.hstack(y_validate)
+
+    if hasattr(clf, 'classes_'):
+        y_validate_probs = np.vstack(y_validate_probs)
+        print('ORIGINAL PROBABILITIES')
+        print(*y_validate_probs[:10].round(4), sep='\n')
+        print('ORIGINAL PROBABILITIES (NORMALIZED)')
+        print(*[np.around(np.expm1(x), 4) for x in y_validate_probs][:10], sep='\n')
+
+        for m in y_mappings.values():
+            df_probs = pd.DataFrame(data=y_validate_probs.round(4)
+                            , columns=['prob_' + f.lower().replace(' ','_') for f in list(m.classes_)[:y_validate_probs.shape[1]]]
+                            , index=df_validate.index)
+            # df_validate.reset_index(inplace=True, drop=True)
+            df_validate = df_validate.join(df_probs, how='inner')
 
     for k, v in y_field.items():
         final_preds = y_mappings[k].inverse_transform(y_validate)
@@ -478,6 +557,7 @@ def predict(df: pd.DataFrame
 
     return df
 
+
 def resilient_inverse_transform(model: sk_prep.LabelEncoder, preds: np.ndarray):
     try:
         preds_str = model.inverse_transform(preds)
@@ -488,12 +568,14 @@ def resilient_inverse_transform(model: sk_prep.LabelEncoder, preds: np.ndarray):
         pass
     return preds_str
 
+
 def fix_np_nan(m: Union[np.matrix, sparse.csr_matrix]) -> Union[np.matrix, sparse.csr_matrix]:
     if sparse.issparse(m):
         m.data = np.nan_to_num(m.data)
     else:
         m = np.nan_to_num(m)
     return m
+
 
 def is_number(s) -> bool:
     try:
@@ -502,17 +584,19 @@ def is_number(s) -> bool:
         return False
     return True
 
+
 def train_models(df: pd.DataFrame
-                 , field_names: OrderedDict
+                 , field_names: dict
                  ):
-    trained_models = OrderedDict()
+    trained_models = dict()
     for f, t in list(field_names.items()):
         if verbose:
             print("VECTORIZING: ", f)
 
         if isinstance(t, (list, np.ndarray)):
+            t = t[t != 'nan']
             vectorizer = sk_prep.LabelEncoder()
-            vectorizer.fit(df[f].values.astype(str).transpose())
+            vectorizer.fit(t)
 
         elif t == 'cat':
             df[f] = df[f].astype(np.str)
@@ -533,6 +617,8 @@ def train_models(df: pd.DataFrame
                 vectorizer = sk_prep.StandardScaler()
             # vectorizer = sk_prep.MinMaxScaler()
             vectorizer.fit(df[f].apply(pd.to_numeric, errors='coerce').fillna(0).values.astype(np.float64).reshape(-1, 1))
+        elif t == 'num_noscale':
+            vectorizer = None
         else:
             raise ValueError('Invalid column type provided. Choose between: \'num\', \'cat\', and \'doc\'.')
         trained_models[f] = vectorizer
@@ -541,20 +627,21 @@ def train_models(df: pd.DataFrame
 
 
 def get_vectors(df: pd.DataFrame
-                , field_names: OrderedDict
-                , trained_models: OrderedDict
+                , field_names: dict
+                , trained_models: dict
                 , is_y: bool=False
                 ):
+
     final_matrix = None
     column_names = list()
     for f, t in list(field_names.items()):
         if verbose:
             print("TRANSFORMING: ", f, end='')
-        isnull_series = df[f].isnull().values.astype(np.float64).reshape(-1, 1)
+        df[f + '_isnull'] = df[f].isnull().values.astype(np.float64).reshape(-1, 1)
         if use_sparse:
-            null_matrix = sparse.csc_matrix(isnull_series, dtype=np.float64)
+            null_matrix = sparse.csc_matrix(df[f + '_isnull'], dtype=np.float64)
         else:
-            null_matrix = isnull_series.as_matrix().astype(np.float64)
+            null_matrix = df[f + '_isnull'].as_matrix().astype(np.float64)
 
         # print(trained_models[f])
         if isinstance(trained_models[f], sk_prep.LabelEncoder):
@@ -593,7 +680,7 @@ def get_vectors(df: pd.DataFrame
             mkdict = lambda row: dict((col, row[col]) for col in [f])
             matrix = trained_models[f].transform(df.apply(mkdict, axis=1)).transpose()
             for v in trained_models[f].get_feature_names():
-                column_names.append((v, True))
+                column_names.append((v, True, f))
 
         elif t == 'doc':
             matrix = trained_models[f].transform(df[f].values.astype(str)).transpose()
@@ -601,16 +688,12 @@ def get_vectors(df: pd.DataFrame
             #     column_names.append((f, False))
             for v in trained_models[f].get_feature_names():
                 # Change to false if you want to eliminate the (MANY) possible words
-                column_names.append((v
-                                     .encode('ascii', errors='ignore')
-                                     .decode('utf-8', errors='ignore'), True))
+                column_names.append((v.encode('ascii', errors='ignore').decode('utf-8', errors='ignore'), True, f))
+            column_names.append((f + '_isnull', True, f))
 
             if use_sparse:
                 matrix = sparse.csc_matrix(matrix)
-
-            if isnull_series.any():
-                column_names.append((f + '_isnull', True))
-                matrix = matrix_vstack((matrix, null_matrix))
+            matrix = matrix_vstack((matrix, null_matrix))
 
         # else:
         elif t == 'num':
@@ -632,26 +715,42 @@ def get_vectors(df: pd.DataFrame
                 if use_sparse:
                     matrix = sparse.csc_matrix(matrix, dtype=np.float64)
 
-                # matrix.data = np.minimum(1, np.maximum(0, np.nan_to_num(matrix.data)))
-                column_names.append((f + '_t', True))
+                # matrix = sparse.vstack((matrix, null_matrix))
+                matrix = matrix_vstack((matrix, null_matrix))
 
-                if isnull_series.any():
-                    matrix = matrix_vstack((matrix, null_matrix))
-                    column_names.append((f + '_isnull', True))
+                # matrix.data = np.minimum(1, np.maximum(0, np.nan_to_num(matrix.data)))
+                column_names.append((f + '_t', True, f))
+                column_names.append((f + '_isnull', True, f))
+
+        elif t == 'num_noscale':
+            matrix = df[f].astype(np.float64).values.transpose()
+            if use_sparse:
+                matrix = sparse.csc_matrix(matrix, dtype=np.float64)
+
+            matrix = matrix_vstack((matrix, null_matrix))
+
+            # matrix.data = np.minimum(1, np.maximum(0, np.nan_to_num(matrix.data)))
+            column_names.append((f + '_t', True, f))
+            column_names.append((f + '_isnull', True, f))
 
         if verbose:
             print(' || Shape: {0}'.format(matrix.shape))
         if final_matrix is not None:
-            final_matrix = matrix_vstack((final_matrix, matrix))
+            if is_y:
+                final_matrix.append(matrix)
+            else:
+                final_matrix = matrix_vstack((final_matrix, matrix))
+
         else:
             final_matrix = matrix
     else:
-        if is_y:
-            return final_matrix, trained_models
-        else:
+        if not is_y:
             if use_sparse:
                 final_matrix = sparse.csr_matrix(final_matrix)
-            return column_names, final_matrix.transpose(), trained_models
+            final_matrix = final_matrix.transpose()
+
+        return column_names, final_matrix, trained_models
+
 
 def matrix_vstack(m):
     if use_sparse:
@@ -659,6 +758,15 @@ def matrix_vstack(m):
     else:
         m = np.vstack(m)
     return m
+
+
+def matrix_hstack(m):
+    if use_sparse:
+        m = sparse.hstack(m)
+    else:
+        m = np.hstack(m)
+    return m
+
 
 def reverse_enumerate(l):
    for index in reversed(range(len(l))):
