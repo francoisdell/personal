@@ -28,6 +28,8 @@ from collections import OrderedDict
 from typing import Union
 from lxml import etree
 import urllib
+import io
+import requests
 
 returns_predict_years_forward = [9, 10, 12]
 recession_predict_years_forward = [1, 2, 3]
