@@ -3,7 +3,7 @@ import math
 import pickle
 from datetime import datetime
 
-import fancyimpute
+# import fancyimpute
 import matplotlib
 import numpy as np
 import pandas as pd
@@ -47,21 +47,21 @@ do_predict_returns = False
 do_predict_recessions = True
 fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
 
-recession_models = [
+# recession_models = [
+#                   ['gbc', 'abc', 'neural_c', 'knn_c', 'sgd_c', 'pass_agg_c', 'bernoulli_nb', 'nearest_centroid', 'ridge_c']
+#                   ]
+
+recession_models = ['gbc',
+                  'abc',
+                  'neural_c',
+                  'knn_c',
+                  'sgd_c',
+                  'pass_agg_c',
+                  'bernoulli_nb',
+                  'nearest_centroid',
+                  'ridge_c',
                   ['gbc','abc','neural_c', 'knn_c', 'sgd_c', 'pass_agg_c', 'bernoulli_nb', 'nearest_centroid', 'ridge_c']
                   ]
-
-# recession_models = ['gbc',
-#                   'abc',
-#                   'neural_c',
-#                   'knn_c',
-#                   'sgd_c',
-#                   'pass_agg_c',
-#                   'bernoulli_nb',
-#                   'nearest_centroid',
-#                   'ridge_c',
-#                   ['gbc','abc','neural_c', 'knn_c', 'sgd_c', 'pass_agg_c', 'bernoulli_nb', 'nearest_centroid', 'ridge_c']
-#                   ]
 
 returns_models = ['knn_r',
                   'elastic_net_stacking',
@@ -441,11 +441,18 @@ def predict_ensemble(df: pd.DataFrame, x_names: list, y_field_name: str, prune: 
 
     if df[x_names].isnull().any().any():
         print('Running imputation')
-        solver = fancyimpute.MICE(init_fill_method='random') # mean, median, or random
-        # solver = fancyimpute.NuclearNormMinimization()
-        # solver = fancyimpute.MatrixFactorization()
-        # solver = fancyimpute.IterativeSVD()
-        df.loc[:, x_names] = solver.complete(df.loc[:, x_names].values)
+        import importlib
+        try:
+            imputer = importlib.import_module("fancyimpute")
+            solver = fancyimpute.MICE(init_fill_method='random') # mean, median, or random
+            # solver = fancyimpute.NuclearNormMinimization()
+            # solver = fancyimpute.MatrixFactorization()
+            # solver = fancyimpute.IterativeSVD()
+            df.loc[:, x_names] = solver.complete(df.loc[:, x_names].values)
+        except ImportError as e:
+            import knnimpute
+            df.loc[:, x_names] = knnimpute.knn_impute_with_argpartition(df.loc[:, x_names],
+                                                                        missing_mask=np.isnan(df.loc[:, x_names]), k=3)
 
     result_field_dict = OrderedDict()
     #################################
@@ -513,13 +520,19 @@ class data_source:
         if isfunction(self.provider):
             self.data = self.provider()
         elif self.provider == 'fred':
-            self.data = fred.get_series(self.code, observation_start=start_dt, observation_end=end_dt)
+            self.data = fred.get_series(self.code
+                                        , observation_start=start_dt
+                                        , observation_end=end_dt)
         elif self.provider == 'yahoo':
             data_obj = yahoo_finance.Share(self.code)
-            self.data = data_obj.get_historical(start_date=start_dt, end_date=end_dt)
+            self.data = data_obj.get_historical(start_date=start_dt
+                                                , end_date=end_dt)
         elif self.provider == 'quandl':
-            self.data = quandl.get(self.code, authtoken="xg_fvD6FLD_qzg2Mc5z-"
-                       , collapse="quarterly", start_date=start_dt, end_date=end_dt)['Value']
+            self.data = quandl.get(self.code
+                                   , authtoken="xg_fvD6FLD_qzg2Mc5z-"
+                                   , collapse="quarterly"
+                                   , start_date=start_dt
+                                   , end_date=end_dt)['Value']
         elif self.provider == 'bls':
             self.data = bls.get_series([self.code]
                                 , startyear=datetime.strptime(start_dt, '%Y-%m-%d').year
