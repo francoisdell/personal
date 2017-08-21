@@ -25,24 +25,52 @@ import Model_Builder as mb
 
 load_from_file = True
 from collections import OrderedDict
-from typing import Union
+from typing import Union, Callable
 from lxml import etree
 import urllib
 import io
 import requests
 
 returns_predict_years_forward = [9, 10, 12]
-recession_predict_years_forward = [1, 2, 3]
+recession_predict_years_forward = [1, 2]
 selection_limit = 1.0e-2
 train_pct = 0.8
 start_dt = '1952-01-01'
 end_dt = datetime.today().strftime('%Y-%m-%d')
-interaction_type = 'level_1'
+interaction_type = 'none'  # Options: all, level_1, none
 use_pca = False
 real = False
 sp_field_name = 'sp500'
 recession_field_name = 'recession_usa'
+verbose = True
+do_predict_returns = False
+do_predict_recessions = True
 fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
+
+recession_models = [
+                  ['gbc','abc','neural_c', 'knn_c', 'sgd_c', 'pass_agg_c', 'bernoulli_nb', 'nearest_centroid', 'ridge_c']
+                  ]
+
+# recession_models = ['gbc',
+#                   'abc',
+#                   'neural_c',
+#                   'knn_c',
+#                   'sgd_c',
+#                   'pass_agg_c',
+#                   'bernoulli_nb',
+#                   'nearest_centroid',
+#                   'ridge_c',
+#                   ['gbc','abc','neural_c', 'knn_c', 'sgd_c', 'pass_agg_c', 'bernoulli_nb', 'nearest_centroid', 'ridge_c']
+#                   ]
+
+returns_models = ['knn_r',
+                  'elastic_net_stacking',
+                  'gbr',
+                  'neural_r',
+                  'ridge']
+
+ensemble_models = ['ridge',
+                   ['knn_r', 'elastic_net_stacking','gbr','neural_r', 'ridge']]
 
 if real:
     sp_field_name += '_real'
@@ -218,17 +246,18 @@ def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, years_fo
     #################################
     y_field = OrderedDict([(forward_y_field_name, 'num')])
     x_fields = OrderedDict([(v, 'num') for v in x_names])
-    model_name = 'ridge'
+    model_name = returns_models
+    report_name = model_name[0] if len(model_name) == 1 else 'stacked'
     df = mb.predict(df
                     , x_fields=x_fields
                     , y_field=y_field
                     , model_type=model_name
-                    , report_name='sp500_' + model_name
+                    , report_name='sp500_' + report_name
                     , show_model_tests=True
                     , retrain_model=True
                     , selection_limit=selection_limit
                     , predict_all=True
-                    , verbose=False
+                    , verbose=True
                     , train_pct=train_pct
                     , random_train_test=False)
 
@@ -327,8 +356,8 @@ def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, years_fo
           , ys=[[forward_y_field_name, forward_y_field_name_pred, 'tsy_10yr_yield'], [y_field_name, y_field_name_pred]]
           , invert=[False, False]
           , log_scale=[False, True]
-          , save_name='_'.join([forward_y_field_name_pred, model_name, str(years_forward)])
-          , title='_'.join([forward_y_field_name_pred, model_name, str(years_forward)]))
+          , save_name='_'.join([forward_y_field_name_pred, report_name, str(years_forward)])
+          , title='_'.join([forward_y_field_name_pred, report_name, str(years_forward)]))
 
     return OrderedDict(((forward_y_field_name, df[forward_y_field_name])
         , (forward_y_field_name_pred, df[forward_y_field_name_pred])
@@ -363,16 +392,20 @@ def predict_recession(df: pd.DataFrame, x_names: list, y_field_name: str, years_
     y_field = OrderedDict([(forward_y_field_name, 'cat')])
     x_fields = OrderedDict([(v, 'num') for v in x_names])
 
+    if not isinstance(model_name, list):
+        model_name = [model_name]
+    report_name = model_name[0] if len(model_name) == 1 else 'stacked'
+
     df = mb.predict(df
                     , x_fields=x_fields
                     , y_field=y_field
                     , model_type=model_name
-                    , report_name='recession_' + model_name
+                    , report_name='recession_' + report_name
                     , show_model_tests=True
                     , retrain_model=True
                     , selection_limit=selection_limit
                     , predict_all=True
-                    , verbose=False
+                    , verbose=True
                     , train_pct=train_pct
                     , random_train_test=False)
 
@@ -392,8 +425,8 @@ def predict_recession(df: pd.DataFrame, x_names: list, y_field_name: str, years_
           , ys=[['sp500'], [y_field_name, y_field_name_pred]]
           , invert=[False, False]
           , log_scale=[True, False]
-          , save_name='_'.join([forward_y_field_name_pred, model_name])
-          , title='_'.join([forward_y_field_name_pred, model_name]))
+          , save_name='_'.join([forward_y_field_name_pred, report_name])
+          , title='_'.join([forward_y_field_name_pred, report_name]))
 
     return OrderedDict(((forward_y_field_name, df[forward_y_field_name])
         , (forward_y_field_name_pred, df[forward_y_field_name_pred])
@@ -404,7 +437,7 @@ def predict_ensemble(df: pd.DataFrame, x_names: list, y_field_name: str, prune: 
     train_mask = ~df[y_field_name].isnull()
     val_mask = df[y_field_name].isnull() & ~df[x_names].isnull().any(axis=1)
 
-    model_list = ['ridge']
+    model_list = ensemble_models
 
     if df[x_names].isnull().any().any():
         print('Running imputation')
@@ -425,7 +458,10 @@ def predict_ensemble(df: pd.DataFrame, x_names: list, y_field_name: str, prune: 
         print(df.to_string())
 
     for model_name in model_list:
-        report_name = '{0}_{1}'.format(y_field_name, model_name)
+
+        if not isinstance(model_name, list):
+            model_name = [model_name]
+        report_name = '{0}_{1}'.format(y_field_name, model_name[0] if len(model_name) == 1 else 'stacked')
         df = mb.predict(df
                         , x_fields=x_fields
                         , y_field=y_field
@@ -435,7 +471,7 @@ def predict_ensemble(df: pd.DataFrame, x_names: list, y_field_name: str, prune: 
                         , retrain_model=True
                         , selection_limit=selection_limit
                         , predict_all=True
-                        , verbose=False
+                        , verbose=True
                         , train_pct=train_pct
                         , random_train_test=False
                         )
@@ -458,7 +494,7 @@ def predict_ensemble(df: pd.DataFrame, x_names: list, y_field_name: str, prune: 
     return result_field_dict
 
 class data_source:
-    def __init__(self, code: str, provider: Union[str, function]):
+    def __init__(self, code: str, provider: Union[str, Callable]):
         self.code = code
         self.data = None
 
@@ -542,24 +578,6 @@ def get_nyse_margin_debt() -> pd.Series:
     df['End of month'] = pd.DatetimeIndex(pd.to_datetime(df['End of month'])).to_period('M').to_timestamp('M')
     df.set_index(['End of month'], inplace=True, drop=True)
     print(df)
-
-def get_margin_debt() -> pd.Series:
-
-    web = urllib.urlopen("http://www.nyxdata.com/nysedata/asp/factbook/viewer_edition.asp?mode=tables&key=50&category=8")
-    s = web.read()
-
-    html = etree.HTML(s)
-
-    ## Get all 'tr'
-    tr_nodes = html.xpath('//table[@class="border"]/tbody')
-
-
-    ## 'th' is inside first 'tr'
-    header = [i[0].text for i in tr_nodes[0].xpath("//u")]
-
-    ## Get text from rest all 'tr'
-    td_content = [[td.text for td in tr.xpath('//td')] for tr in tr_nodes[1:]]
-    return make_qtrly(ds, 'last')
 
 
 data_sources = dict()
@@ -961,39 +979,42 @@ df[sp500_qtr_since_last_corr] = time_since_last_true(df[new_x_names[-1]])
 
 ensemble_df = pd.DataFrame(df[sp_field_name], index=df.index, columns=[sp_field_name])
 ensemble_x_names = list()
-for yf in returns_predict_years_forward:
-    d = predict_returns(df, x_names, sp_field_name, yf, prune=True)
-    for k,v in d.items():
-        df[k] = v
 
-    new_dataset = [v for v in d.values()][-1]
-    new_field_name = 'sp500_{0}yr'.format(yf)
-
-    # print(ensemble_df.index)
-    # print(new_dataset.index)
-    new_df = new_dataset.to_frame(name=new_field_name)
-    ensemble_df = ensemble_df.join(new_df, how='right')
-    ensemble_x_names.append(new_field_name)
-
-# Use the results of the various forward prediction models to construct an ensemble model!!!
-ensemble_mask = [x >= 5 for x in ensemble_df.loc[:, ensemble_x_names].count(axis=1).values]
-# ensemble_mask = ensemble_mask.values.tolist() + [True for v in range(ensemble_df.shape[0] - non_null_mask.shape[0])]
-ensemble_df = ensemble_df.loc[ensemble_mask, :]
-# d = predict_ensemble(ensemble_df, ensemble_x_names, sp_field_name)
-
-
-# RECESSION PREDICTIONS
-for yf in recession_predict_years_forward:
-    for m in ['gbc','abc','neural_c']:
-        d = predict_recession(df, x_names, recession_field_name, yf, prune=True, model_name=m)
+if do_predict_returns:
+    for yf in returns_predict_years_forward:
+        d = predict_returns(df, x_names, sp_field_name, yf, prune=True)
         for k,v in d.items():
             df[k] = v
 
         new_dataset = [v for v in d.values()][-1]
-        new_field_name = 'recession_{0}yr'.format(yf)
+        new_field_name = 'sp500_{0}yr'.format(yf)
 
         # print(ensemble_df.index)
         # print(new_dataset.index)
         new_df = new_dataset.to_frame(name=new_field_name)
+        ensemble_df = ensemble_df.join(new_df, how='right')
+        ensemble_x_names.append(new_field_name)
+
+    # Use the results of the various forward prediction models to construct an ensemble model!!!
+    ensemble_mask = [x >= 5 for x in ensemble_df.loc[:, ensemble_x_names].count(axis=1).values]
+    # ensemble_mask = ensemble_mask.values.tolist() + [True for v in range(ensemble_df.shape[0] - non_null_mask.shape[0])]
+    ensemble_df = ensemble_df.loc[ensemble_mask, :]
+    # d = predict_ensemble(ensemble_df, ensemble_x_names, sp_field_name)
+
+
+# RECESSION PREDICTIONS
+if do_predict_recessions:
+    for yf in recession_predict_years_forward:
+        for m in recession_models:
+            d = predict_recession(df, x_names, recession_field_name, yf, prune=True, model_name=m)
+            for k,v in d.items():
+                df[k] = v
+
+            new_dataset = [v for v in d.values()][-1]
+            new_field_name = 'recession_{0}yr'.format(yf)
+
+            # print(ensemble_df.index)
+            # print(new_dataset.index)
+            new_df = new_dataset.to_frame(name=new_field_name)
 
 

@@ -8,8 +8,8 @@ if os.path.abspath(os.pardir) not in sys.path:
 from typing import Union
 from math import exp
 import math
-import Settings
-# from collections import OrderedDict
+from Settings import Settings
+from collections import OrderedDict
 import numpy as np
 import prettytable
 import pandas as pd
@@ -49,12 +49,12 @@ from sklearn import metrics
 
 pd.options.mode.chained_assignment = None
 
-global use_sparse, verbose
+global use_sparse, verbose, s
 use_sparse=True
 
 def predict(df: pd.DataFrame
             , x_fields: dict
-            , y_field: dict
+            , y_field: Union[dict, OrderedDict]
             , model_type: Union[str, list]
             , report_name: str
             , show_model_tests: bool=False
@@ -67,17 +67,15 @@ def predict(df: pd.DataFrame
             , max_train_size: int=50000
             ) -> pd.DataFrame:
 
-
+    global s
     globals()['verbose'] = verbose
-    globals()['Settings'] = Settings.Settings(report_name)
-    global Settings
-    final_file_dir = Settings.get_default_data_dir()
+    s = Settings(report_name=report_name)
+    final_file_dir = s.get_default_data_dir()
     # os.makedirs(final_file_dir, exist_ok=True)
 
-    model_dir = Settings.get_model_dir()
+    model_dir = s.get_model_dir()
     # os.makedirs(model_dir, exist_ok=True)
 
-    global use_sparse
     if not isinstance(model_type, list):
         model_type = [model_type]
 
@@ -155,7 +153,6 @@ def predict(df: pd.DataFrame
         x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
         x_train = fix_np_nan(x_train)
 
-        mask_all = np.asarray([True for v in range(df.shape[0])], dtype=np.bool)
         for idx, mt in enumerate(model_type):
 
             # print(x_train.shape)
@@ -166,44 +163,41 @@ def predict(df: pd.DataFrame
             if not isinstance(mt, str) and hasattr(mt, 'fit'):
                 clf = mt
                 model_type[idx], mt = ('custom', 'custom')
-                if isinstance(clf, (gbr)):
-                    use_sparse = False
             elif mt == 'rfor':
-                clf = rfor(random_state=555, verbose=True, n_estimators=31, class_weight='balanced')
+                clf = rfor(n_estimators=31, class_weight='balanced')
             elif mt == 'logit':
-                clf = logr(random_state=555, verbose=True, class_weight='balanced')
+                clf = logr(class_weight='balanced')
             elif mt == 'linreg':
                 clf = linreg()
             elif mt == 'ridge':
-                clf = ridge(random_state=555)
+                clf = ridge()
             elif mt == 'lasso':
-                clf = Lasso(random_state=555)
+                clf = Lasso()
             elif mt == 'elastic_net':
-                clf = ElasticNet(random_state=555, positive=True)  # Used positive=True to make this ideal for stacking
+                clf = ElasticNet()
             elif mt == 'elastic_net_stacking':
-                clf = ElasticNet(random_state=555, positive=True)  # Used positive=True to make this ideal for stacking
+                clf = ElasticNet(positive=True)  # Used positive=True to make this ideal for stacking
             elif mt == 'neural_c':
-                clf = cmlp(random_state=555, verbose=True, learning_rate_init=0.1, learning_rate='adaptive'
+                clf = cmlp(learning_rate_init=0.1, learning_rate='adaptive'
                            # , max_iter=int(round(x_train.shape[0]/2000, 0))  ## Will cause failure to converge
                            )
             elif mt == 'neural_r':
-                clf = rmlp(random_state=555, verbose=True, learning_rate_init=0.1, learning_rate='adaptive'
+                clf = rmlp(learning_rate_init=0.1, learning_rate='adaptive'
                            # , max_iter=int(round(x_train.shape[0]/2000, 0))  ## Will cause failure to converge
                            )
             elif mt == 'svc':
-                clf = svc(random_state=555, verbose=True, kernel='rbf', probability=True, max_iter=1000
+                clf = svc(kernel='rbf', probability=True, max_iter=1000
                           , class_weight='balanced')
             elif mt == 'svr_lin':
-                clf = svr(verbose=True, kernel='linear', max_iter=1000)
+                clf = svr(kernel='linear', max_iter=1000)
             elif mt == 'svr_rbf':
-                clf = svr(verbose=True, kernel='rbf', max_iter=1000)
+                clf = svr(kernel='rbf', max_iter=1000)
             elif mt == 'gbc':
-                clf = gbc(random_state=555, verbose=True, n_estimators=int(round(x_train.shape[0]/20, 0)))
+                clf = gbc(n_estimators=int(round(x_train.shape[0]/20, 0)))
             elif mt == 'gbr':
-                clf = gbr(random_state=555, verbose=True, n_estimators=int(round(x_train.shape[0] / 20, 0)))
-                use_sparse = False
+                clf = gbr(n_estimators=int(round(x_train.shape[0] / 20, 0)))
             elif mt == 'abc':
-                clf = abc(random_state=555, n_estimators=int(round(x_train.shape[0]/20, 0)))
+                clf = abc(n_estimators=int(round(x_train.shape[0]/20, 0)))
             elif mt == 'knn_c':
                 clf = KNeighborsClassifier()
             elif mt == 'knn_r':
@@ -225,6 +219,19 @@ def predict(df: pd.DataFrame
             else:
                 raise ValueError('Incorrect model_type given. Cannot match [%s] to a model.' % mt)
 
+            global use_sparse
+            if isinstance(clf, (gbr)):
+                use_sparse = False
+
+            else:
+                use_sparse = True
+
+            if hasattr(clf, 'random_state'):
+                clf.random_state = 555
+            if hasattr(clf, 'verbose'):
+                clf.verbose = verbose
+
+            mask_all = np.asarray([True for v in range(df.shape[0])], dtype=np.bool)
             # print("NaN in x_train: %s" % np.isnan(x_train.data).any())
             # print("NaN in y_train: %s" % np.isnan(y_train.data).any())
 
@@ -233,20 +240,22 @@ def predict(df: pd.DataFrame
             if isinstance(clf, (ridge, Lasso, SGDClassifier)):
                 # load the diabetes datasets
                 # prepare a range of alpha values to test
-                alphas = np.array([100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0])
+                alphas = [100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0]
+                if hasattr(clf, 'learning_rate') and clf.learning_rate == 'optimal':
+                   del alphas[-1]
                 # create and fit a ridge regression model, testing each alpha
                 grid = GridSearchCV(estimator=clf, param_grid=dict(alpha=alphas))
                 grid.fit(x_train, y_train)
                 print(grid)
                 # summarize the results of the grid search
-                print('KNN Regression Best Score:', grid.best_score_)
-                print('KNN Regression Best Alpha:', grid.best_estimator_.alpha)
+                print('Linear Regression Best Score:', grid.best_score_)
+                print('Linear Regression Best Alpha:', grid.best_estimator_.alpha)
                 clf.alpha = grid.best_estimator_.alpha
 
             if isinstance(clf, (LinearSVC, RidgeClassifier)):
                 # load the diabetes datasets
                 # prepare a range of alpha values to test
-                tols = np.array([100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0])
+                tols = [100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0]
                 # create and fit a ridge regression model, testing each alpha
                 grid = GridSearchCV(estimator=clf, param_grid={'tol': tols})
                 grid.fit(x_train, y_train)
@@ -254,7 +263,18 @@ def predict(df: pd.DataFrame
                 # summarize the results of the grid search
                 print('KNN Regression Best Score:', grid.best_score_)
                 print('KNN Regression Best Alpha:', grid.best_estimator_.tol)
-                clf.alpha = grid.best_estimator_.tol
+                clf.tol = grid.best_estimator_.tol
+
+            elif selection_limit < 1.0:
+                scores, p_vals = sk_feat_sel.f_regression(x_train, y_train, center=False)
+                for x_field_name in list(x_fields.keys()):
+                    xcol_indices = [idx for idx, vals in enumerate(x_columns) if vals[2] == x_field_name]
+                    if all(p_vals[idx] > selection_limit or p_vals[idx] == np.nan for idx in xcol_indices):
+                        x_fields.pop(x_field_name)
+
+                x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
+
+                x_train = fix_np_nan(x_train)
 
             if isinstance(clf, (KNeighborsClassifier, KNeighborsRegressor)):
                 # load the diabetes datasets
@@ -269,16 +289,6 @@ def predict(df: pd.DataFrame
                 print('{0} Regression Best Score: {1}'.format(mt, grid.best_estimator_.n_neighbors))
                 clf.n_neighbors = grid.best_estimator_.n_neighbors
 
-            if selection_limit < 1.0:
-                scores, p_vals = sk_feat_sel.f_regression(x_train, y_train, center=False)
-                for x_field_name in list(x_fields.keys()):
-                    xcol_indices = [idx for idx, vals in enumerate(x_columns) if vals[2] == x_field_name]
-                    if all(p_vals[idx] > selection_limit or p_vals[idx] == np.nan for idx in xcol_indices):
-                        x_fields.pop(x_field_name)
-
-                x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
-
-                x_train = fix_np_nan(x_train)
 
             clf.fit(x_train, y_train)
             print("------ Model Training Complete ------\n")
@@ -333,13 +343,14 @@ def predict(df: pd.DataFrame
                     print(*preds[:10])
                     pred_x_name = '{0}_pred_{1}'.format(mt, k)
                     df.loc[:, pred_x_name] = preds
-                    new_x_fields = {pred_x_name: list(y_field.values())[-1]}
+                    new_x_fields = {pred_x_name: 'cat' if not isinstance(v, str) else v}
                     x_fields = {**x_fields, **new_x_fields}
                     x_mappings = {**x_mappings, **train_models(df[mask_train], new_x_fields)}
                     new_x_columns, new_x_train, x_mappings = get_vectors(df[mask_train], new_x_fields, x_mappings)
                     x_columns += new_x_columns
                     new_x_train = fix_np_nan(new_x_train)
-                    x_train = matrix_hstack((x_train, new_x_train))
+                    # new_x_train = sparse.csc_matrix(np.hstack(new_x_train))
+                    x_train = matrix_hstack((x_train, new_x_train), return_sparse=True)
 
         try:
             with open(predictive_model_file, 'wb') as pickle_file:
@@ -495,7 +506,7 @@ def predict(df: pd.DataFrame
         except TypeError as e:
             if "dense data is required" in str(e):
                 x_test = x_test.toarray()
-                use_sparse = True
+                use_sparse = False
                 preds = clf.predict(x_test)
         print('R2 SCORE\n', r2_score(y_test, preds))
 
@@ -503,22 +514,23 @@ def predict(df: pd.DataFrame
             print('CLASSES')
             print(clf.classes_)
             print('ACCURACY:\n', metrics.accuracy_score(y_test, preds))
-            y_test_probs = clf.predict_proba(x_test)
             try:
+                y_test_probs = clf.predict_proba(x_test)
                 if y_test_probs.shape[1] <= 2:
                     print('ROC-CURVE AOC', metrics.roc_auc_score(y_test, y_test_probs[:, 1]))
-            except ValueError as e:
+
+                print("PREDICTION PROBABILITIES")
+                print(y_test_probs)
+            except (ValueError, AttributeError) as e:
                 print(e)
                 pass
+
             # if not isinstance(preds, list):
             #     preds = [preds]
             # lol = list(enumerate(preds))
             # maps = list(y_mappings.values())
 
             # preds = [list(y_mappings.values())[index][values] for index, values in enumerate(preds)]
-
-            print("PREDICTION PROBABILITIES")
-            print(y_test_probs)
 
             for k, v in y_field.items():
                 preds_str = resilient_inverse_transform(y_mappings[k], preds)
@@ -553,29 +565,26 @@ def predict(df: pd.DataFrame
         x_validate = fix_np_nan(x_validate)
 
         # print(x_validate)
-
         try:
             preds = clf.predict(x_validate)
-            if hasattr(clf, 'classes_'):
-                pred_probs = clf.predict_proba(x_validate)
         except TypeError as e:
             if "dense data is required" in str(e):
                 x_validate = x_validate.toarray()
                 use_sparse = False
                 preds = clf.predict(x_validate)
-                if hasattr(clf, 'classes_'):
-                    pred_probs = clf.predict_proba(x_validate)
                 pass
         except DeprecationWarning as e:
             print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
             print(e)
             x_validate = x_validate.reshape(-1, 1)
             preds = clf.predict(x_validate)
-            if hasattr(clf, 'classes_'):
-                pred_probs = clf.predict_proba(x_validate)
             pass
 
-        if hasattr(clf, 'classes_'):
+        calculate_probs = hasattr(clf, 'classes_') \
+                          and hasattr(clf, 'predict_proba') \
+                          and not (hasattr(clf, 'loss') and clf.loss == 'hinge')
+        if calculate_probs:
+            pred_probs = clf.predict_proba(x_validate)
             y_validate_probs.append(pred_probs)
 
         y_validate.append(preds)
@@ -583,7 +592,7 @@ def predict(df: pd.DataFrame
     # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
     y_validate = np.hstack(y_validate)
 
-    if hasattr(clf, 'classes_'):
+    if calculate_probs:
         y_validate_probs = np.vstack(y_validate_probs)
         print('ORIGINAL PROBABILITIES')
         print(*y_validate_probs[:10].round(4), sep='\n')
@@ -800,24 +809,44 @@ def get_vectors(df: pd.DataFrame
         if not is_y:
             if use_sparse:
                 final_matrix = sparse.csr_matrix(final_matrix)
+            elif len(final_matrix.shape) == 1:
+                final_matrix.reshape(-1, 1)
             final_matrix = final_matrix.transpose()
 
         return column_names, final_matrix, trained_models
 
 
-def matrix_vstack(m):
+def matrix_vstack(m: tuple, return_sparse: bool=None):
+    global use_sparse
+    if sum([sparse.issparse(d) for d in list(m)]) == 1:
+        use_sparse = False
+        m = [d.toarray() if sparse.issparse(d) else d for d in list(m)]
+        m = tuple(m)
+
     if use_sparse:
         m = sparse.vstack(m)
     else:
         m = np.vstack(m)
+        if return_sparse:
+            m = sparse.csc_matrix(m)
     return m
 
 
-def matrix_hstack(m):
+def matrix_hstack(m: tuple, return_sparse: bool=None):
+    global use_sparse
+    if sum([sparse.issparse(d) for d in list(m)]) == 1:
+        use_sparse = False
+        m = [d.toarray() if sparse.issparse(d) else (d.reshape(-1,1) if len(d.shape)==1 else d) for d in list(m)]
+        m = tuple(m)
+
     if use_sparse:
         m = sparse.hstack(m)
+        if return_sparse is False:
+            m = m.toarray()
     else:
         m = np.hstack(m)
+        if return_sparse:
+            m = sparse.csc_matrix(m)
     return m
 
 
