@@ -825,6 +825,8 @@ def matrix_vstack(m: tuple, return_sparse: bool=None):
 
     if use_sparse:
         m = sparse.vstack(m)
+        if return_sparse is False:
+            m = m.toarray()
     else:
         m = np.vstack(m)
         if return_sparse:
