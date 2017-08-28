@@ -2,6 +2,7 @@ import calendar
 import math
 import pickle
 from datetime import datetime
+from datetime import timedelta
 
 # import fancyimpute
 import matplotlib
@@ -20,6 +21,10 @@ from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import Ridge
 from sklearn.neural_network import MLPRegressor
 from inspect import isfunction
+from bs4 import BeautifulSoup as bs
+import decimal
+from pandas.compat import StringIO
+import requests_cache
 
 import Model_Builder as mb
 
@@ -27,12 +32,13 @@ load_from_file = True
 from collections import OrderedDict
 from typing import Union, Callable
 from lxml import etree
-import urllib
+from urllib import request
 import io
 import requests
+import importlib
 
-returns_predict_years_forward = [9, 10, 12]
-recession_predict_years_forward = [1, 2]
+returns_predict_years_forward = [5, 9, 10]
+recession_predict_years_forward = [2, 3]
 selection_limit = 1.0e-2
 train_pct = 0.8
 start_dt = '1952-01-01'
@@ -42,32 +48,50 @@ use_pca = False
 real = False
 sp_field_name = 'sp500'
 recession_field_name = 'recession_usa'
-verbose = True
+verbose = False
 do_predict_returns = False
 do_predict_recessions = True
 fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
 
-# recession_models = [
-#                   ['gbc', 'abc', 'neural_c', 'knn_c', 'sgd_c', 'pass_agg_c', 'bernoulli_nb', 'nearest_centroid', 'ridge_c']
-#                   ]
-
-recession_models = ['gbc',
-                  'abc',
-                  'neural_c',
-                  'knn_c',
-                  'sgd_c',
-                  'pass_agg_c',
-                  'bernoulli_nb',
-                  'nearest_centroid',
-                  'ridge_c',
-                  ['gbc','abc','neural_c', 'knn_c', 'sgd_c', 'pass_agg_c', 'bernoulli_nb', 'nearest_centroid', 'ridge_c']
+recession_models = [
+                   ['abc','knn_c','bernoulli_nb','nearest_centroid','rfor','ridge_c','gbc','pass_agg_c','sgd_c','logit']  # 2yr: 3  ||  3yr: 2
+                  ,['abc','knn_c','bernoulli_nb','nearest_centroid','ridge_c','gbc','sgd_c','logit','rfor','pass_agg_c']  # 2yr: 3  ||  3yr: 1
+                  ,['knn_c','bernoulli_nb','ridge_c','rfor','gbc','pass_agg_c','sgd_c','logit','abc','nearest_centroid']  # 2yr: 0  ||  3yr: 0
+                  ,['knn_c','ridge_c','gbc','pass_agg_c','sgd_c','rfor','logit','abc','nearest_centroid','bernoulli_nb']  # 2yr: 1  ||  3yr: 1
+                  ,['ridge_c','gbc','pass_agg_c','sgd_c','logit','abc','rfor','nearest_centroid','bernoulli_nb','knn_c']  # 2yr: 0  ||  3yr: 1
+                  ,['abc','logit','rfor','knn_c','bernoulli_nb','nearest_centroid','gbc','pass_agg_c','ridge_c','sgd_c']  # 2yr: 2  ||  3yr:
+                  ,['abc','logit','knn_c','bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','ridge_c','gbc']  # 2yr: 3  ||  3yr:
                   ]
 
-returns_models = ['knn_r',
-                  'elastic_net_stacking',
-                  'gbr',
-                  'neural_r',
-                  'ridge']
+## INTERESTING @ 2 YEARS
+# recession_models = [
+#                   ['abc','neural_c','knn_c','sgd_c','bernoulli_nb','nearest_centroid','ridge_c','pass_agg_c','gbc']
+#                   ]
+
+# recession_models = ['gbc',
+#                   'abc',
+#                   'neural_c',
+#                   'knn_c',
+#                   'sgd_c',
+#                   'pass_agg_c',
+#                   'bernoulli_nb',
+#                   'nearest_centroid',
+#                   'ridge_c',
+#                   ['gbc','abc','knn_c','sgd_c','pass_agg_c','bernoulli_nb','nearest_centroid','ridge_c','neural_c']
+#                   ]
+
+returns_models = [
+                # 'knn_r',
+                # 'elastic_net_stacking',
+                # 'gbr',
+                # 'neural_r',
+                # 'ridge'
+                ['rfor_r','svr_rbf','sgd_r','gbr','neural_r','pass_agg_r','elastic_net','knn_r','ridge']
+                # , ['knn_r','gbr','ridge', 'svr_rbf','elastic_net_stacking']
+                # , ['knn_r','gbr','ridge', 'svr_rbf','elastic_net']
+                , ['elastic_net','pass_agg_r','knn_r','svr_rbf','gbr','neural_r','sgd_r','ridge','rfor_r']
+                , ['knn_r','gbr','rfor_r','svr_rbf','elastic_net','pass_agg_r','ridge','sgd_r']
+                ]
 
 ensemble_models = ['ridge',
                    ['knn_r', 'elastic_net_stacking','gbr','neural_r', 'ridge']]
@@ -217,8 +241,8 @@ def reverse_enumerate(l):
    for index in reversed(range(len(l))):
       yield index, l[index]
 
-def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, years_forward: int, prune: bool=False)\
-        -> OrderedDict:
+def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, model_name: Union[str, list], years_forward: int, prune: bool=False)\
+        -> (OrderedDict, str):
 
     print("\n-----------------------"
           "\n   YEARS FORWARD: {0} "
@@ -246,18 +270,19 @@ def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, years_fo
     #################################
     y_field = OrderedDict([(forward_y_field_name, 'num')])
     x_fields = OrderedDict([(v, 'num') for v in x_names])
-    model_name = returns_models
-    report_name = model_name[0] if len(model_name) == 1 else 'stacked'
+    if isinstance(model_name, str):
+        models = [model_name]
+    report_name = 'returns_{0}yr_{1}'.format(years_forward, model_name[0] if len(model_name) == 1 else 'stacked')
     df = mb.predict(df
                     , x_fields=x_fields
                     , y_field=y_field
                     , model_type=model_name
-                    , report_name='sp500_' + report_name
+                    , report_name=report_name
                     , show_model_tests=True
                     , retrain_model=True
                     , selection_limit=selection_limit
                     , predict_all=True
-                    , verbose=True
+                    , verbose=verbose
                     , train_pct=train_pct
                     , random_train_test=False)
 
@@ -357,16 +382,22 @@ def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, years_fo
           , invert=[False, False]
           , log_scale=[False, True]
           , save_name='_'.join([forward_y_field_name_pred, report_name, str(years_forward)])
-          , title='_'.join([forward_y_field_name_pred, report_name, str(years_forward)]))
+          , title='_'.join([y_field_name, report_name]))
 
-    return OrderedDict(((forward_y_field_name, df[forward_y_field_name])
+    return (OrderedDict(((forward_y_field_name, df[forward_y_field_name])
         , (forward_y_field_name_pred, df[forward_y_field_name_pred])
         , (y_field_name_pred, df[y_field_name_pred])))
+        , report_name)
 
 
 
-def predict_recession(df: pd.DataFrame, x_names: list, y_field_name: str, years_forward: int, prune: bool=False, model_name='gbc') \
-        -> OrderedDict:
+def predict_recession(df: pd.DataFrame
+                      , x_names: list
+                      , y_field_name: str
+                      , years_forward: int
+                      , prune: bool=False
+                      , model_name: Union[str, list]='gbc') \
+        -> (OrderedDict, str):
 
     print("\n-----------------------"
           "\n   YEARS FORWARD: {0} "
@@ -394,18 +425,18 @@ def predict_recession(df: pd.DataFrame, x_names: list, y_field_name: str, years_
 
     if not isinstance(model_name, list):
         model_name = [model_name]
-    report_name = model_name[0] if len(model_name) == 1 else 'stacked'
+    report_name = 'recession_{0}yr_{1}'.format(years_forward, model_name[0] if len(model_name) == 1 else 'stacked')
 
     df = mb.predict(df
                     , x_fields=x_fields
                     , y_field=y_field
                     , model_type=model_name
-                    , report_name='recession_' + report_name
+                    , report_name=report_name
                     , show_model_tests=True
                     , retrain_model=True
                     , selection_limit=selection_limit
                     , predict_all=True
-                    , verbose=True
+                    , verbose=verbose
                     , train_pct=train_pct
                     , random_train_test=False)
 
@@ -419,18 +450,26 @@ def predict_recession(df: pd.DataFrame, x_names: list, y_field_name: str, years_
 
     y_field_name_pred = '{0}_pred'.format(y_field_name)
     df[y_field_name_pred] = df[forward_y_field_name_pred].shift(years_forward * 4)
+    chart_y_field_names = [y_field_name, y_field_name_pred]
+
+    y_pred_names = mb.get_pred_field_names()
+    y_prob_field_name = '{0}_prob_1.0'.format(forward_y_field_name)
+    if y_prob_field_name in y_pred_names:
+        df[y_prob_field_name] = df[y_prob_field_name].shift(years_forward * 4)
+        chart_y_field_names += [y_prob_field_name]
 
     # if years_forward in [10]:
     chart(df
-          , ys=[['sp500'], [y_field_name, y_field_name_pred]]
+          , ys=[['sp500'], chart_y_field_names]
           , invert=[False, False]
           , log_scale=[True, False]
           , save_name='_'.join([forward_y_field_name_pred, report_name])
-          , title='_'.join([forward_y_field_name_pred, report_name]))
+          , title='_'.join([y_field_name, report_name]))
 
-    return OrderedDict(((forward_y_field_name, df[forward_y_field_name])
+    return (OrderedDict(((forward_y_field_name, df[forward_y_field_name])
         , (forward_y_field_name_pred, df[forward_y_field_name_pred])
         , (y_field_name_pred, df[y_field_name_pred])))
+        , report_name)
 
 def predict_ensemble(df: pd.DataFrame, x_names: list, y_field_name: str, prune: bool=False):
 
@@ -441,17 +480,16 @@ def predict_ensemble(df: pd.DataFrame, x_names: list, y_field_name: str, prune: 
 
     if df[x_names].isnull().any().any():
         print('Running imputation')
-        import importlib
         try:
             imputer = importlib.import_module("fancyimpute")
-            solver = fancyimpute.MICE(init_fill_method='random') # mean, median, or random
+            solver = imputer.MICE(init_fill_method='random') # mean, median, or random
             # solver = fancyimpute.NuclearNormMinimization()
             # solver = fancyimpute.MatrixFactorization()
             # solver = fancyimpute.IterativeSVD()
             df.loc[:, x_names] = solver.complete(df.loc[:, x_names].values)
         except ImportError as e:
-            import knnimpute
-            df.loc[:, x_names] = knnimpute.knn_impute_with_argpartition(df.loc[:, x_names],
+            imputer = importlib.import_module("knnimpute")
+            df.loc[:, x_names] = imputer.knn_impute_with_argpartition(df.loc[:, x_names],
                                                                         missing_mask=np.isnan(df.loc[:, x_names]), k=3)
 
     result_field_dict = OrderedDict()
@@ -478,7 +516,7 @@ def predict_ensemble(df: pd.DataFrame, x_names: list, y_field_name: str, prune: 
                         , retrain_model=True
                         , selection_limit=selection_limit
                         , predict_all=True
-                        , verbose=True
+                        , verbose=verbose
                         , train_pct=train_pct
                         , random_train_test=False
                         )
@@ -500,12 +538,23 @@ def predict_ensemble(df: pd.DataFrame, x_names: list, y_field_name: str, prune: 
 
     return result_field_dict
 
+def decimal_to_date(d: str):
+    year = int(float(d))
+    frac = float(d) - year
+    base = datetime(year, 1, 1)
+    result = base + timedelta(seconds=(base.replace(year=base.year + 1) - base).total_seconds() * frac)
+    return result
+
+# lol = decimal_to_date('2017.3213421')
+# print(lol)
+
 class data_source:
-    def __init__(self, code: str, provider: Union[str, Callable]):
+    def __init__(self, code: str, provider: Union[str, Callable], rerun: bool=False):
         self.code = code
         self.data = None
+        self.rerun = rerun
 
-        if provider in ('fred', 'yahoo', 'quandl'):
+        if provider in ('fred', 'yahoo', 'quandl', 'schiller', 'eod_hist', 'bls'):
             self.provider = provider
         elif isfunction(provider):
             self.provider = provider
@@ -523,10 +572,34 @@ class data_source:
             self.data = fred.get_series(self.code
                                         , observation_start=start_dt
                                         , observation_end=end_dt)
-        elif self.provider == 'yahoo':
-            data_obj = yahoo_finance.Share(self.code)
-            self.data = data_obj.get_historical(start_date=start_dt
-                                                , end_date=end_dt)
+        elif self.provider == 'eod_hist':
+            url = 'https://eodhistoricaldata.com/api/eod/{0}'.format(self.code)
+            params = {'api_token': '599dc44361b10'}
+            expire_after = timedelta(days=1).total_seconds()
+            session = requests_cache.CachedSession(cache_name='cache', backend='sqlite', expire_after=expire_after)
+            r = session.get(url, params=params)
+            if r.status_code != requests.codes.ok:
+                session = requests.Session()
+                r = session.get(url, params=params)
+            if r.status_code == requests.codes.ok:
+                df = pd.read_csv(StringIO(r.text), skipfooter=1, parse_dates=[0], index_col=0, engine='python')
+                self.data = df['Close']
+            else:
+                raise Exception(r.status_code, r.reason, url)
+
+        elif self.provider == 'schiller':
+            import csv
+            import io
+            import urllib.request
+            import bs4
+            url = 'http://www.econ.yale.edu/~shiller/data/ie_data.xls'
+            webpage = requests.get(url, stream=True)
+            self.data = pd.read_excel(io.BytesIO(webpage.content), 'Data', header=7, skip_footer=1)
+            self.data.index = self.data['Date'].apply(lambda x: datetime.strptime(str(x).format(x, '4.2f'), '%Y.%m'))
+            self.data = self.data[self.code]
+            print(self.data.tail(5))
+            lol = 1
+
         elif self.provider == 'quandl':
             self.data = quandl.get(self.code
                                    , authtoken="xg_fvD6FLD_qzg2Mc5z-"
@@ -539,6 +612,19 @@ class data_source:
                                 , endyear=datetime.strptime(end_dt, '%Y-%m-%d').year
                                 , key='3d75f024d5f64d189e5de4b7cbb99730'
                                 )
+        print("Collected data for [{0}]".format(self.code))
+
+def get_encoding_type(current_file: str):
+    print("Determining file encoding: [%s]" % current_file)
+    from chardet.universaldetector import UniversalDetector
+    detector = UniversalDetector()
+    detector.reset()
+    for line in open(current_file, 'rb'):
+        detector.feed(line)
+        if detector.done: break
+    detector.close()
+    print(current_file.split('\\')[-1] + ": " + detector.result['encoding'])
+    return detector.result['encoding']
 
 def calc_equity_alloc() -> pd.Series:
 
@@ -597,11 +683,12 @@ data_sources = dict()
 data_sources['cpi_urb_nonvol'] = data_source('CPILFESL', 'fred')
 data_sources['netexp_nom'] = data_source('NETEXP', 'fred')
 data_sources['gdp_nom'] = data_source('GDP', 'fred')
-data_sources['sp500'] = data_source('^GSPC', 'yahoo')
-data_sources['tsy_3mo_yield'] = data_source('^IRX', 'yahoo')
-data_sources['tsy_5yr_yield'] = data_source('^FVX', 'yahoo')
-data_sources['tsy_10yr_yield'] = data_source('^TNX', 'yahoo')
-data_sources['tsy_30yr_yield'] = data_source('^TYX', 'yahoo')
+data_sources['sp500'] = data_source('P', 'schiller')
+data_sources['cape'] = data_source('CAPE', 'schiller')
+data_sources['tsy_3mo_yield'] = data_source('DGS5', 'fred')
+data_sources['tsy_5yr_yield'] = data_source('DGS5', 'fred')
+data_sources['tsy_10yr_yield'] = data_source('DGS10', 'fred')
+data_sources['tsy_30yr_yield'] = data_source('DGS30', 'fred')
 data_sources['fed_funds_rate'] = data_source('FEDFUNDS', 'fred')
 data_sources['gold_fix_3pm'] = data_source('GOLDPMGBD228NLBM', 'fred')
 data_sources['unempl_rate'] = data_source('UNRATE', 'fred')
@@ -636,8 +723,11 @@ try:
     if load_from_file:
         with open('sp500_hist.p', 'rb') as f:
             (data_sources_temp,) = pickle.load(f)
-            for k in data_sources.keys():
+            for k, v in data_sources.items():
                 if k not in data_sources_temp:
+                    print('New data source added: [{0}]'.format(k))
+                    data_sources_temp[k] = data_sources[k]
+                elif v.rerun is True:
                     print('New data source added: [{0}]'.format(k))
                     data_sources_temp[k] = data_sources[k]
         data_sources = data_sources_temp
@@ -682,9 +772,7 @@ def trim_outliers(y: pd.Series, thresh=4):
 
 df = pd.DataFrame()
 for k, ds in data_sources.items():
-    if ds.provider == 'yahoo':
-        df[k] = make_qtrly(get_closes(ds.data), 'last')
-    elif ds.provider == 'fred':
+    if ds.provider in ('eod_hist', 'fred', 'schiller'):
         df[k] = make_qtrly(ds.data, 'last')
     else:
         df[k] = ds.data
@@ -697,6 +785,9 @@ df['netexp_pct_of_gdp'] = (df['netexp_nom'] / df['gdp_nom'])
 df['base_minus_fed_res_tot'] = df['monetary_base_tot'] - df['fed_reserves_tot']
 df['med_family_income_vs_house_price'] = df['med_house_price'] / df['med_family_income']
 df['real_med_family_income'] =  df['med_family_income'] / df['cpi_urb_nonvol']
+df['tsy_10yr_minus_cpi'] = df['tsy_10yr_yield'] - df['cpi_urb_nonvol']
+df['tsy_10yr_minus_fed_funds_rate'] = df['tsy_10yr_yield'] - df['fed_funds_rate']
+df['tsy_3m10y_curve'] = df['tsy_3mo_yield'] / df['tsy_10yr_yield']
 
 # 4.2655 corresponds to a 0.125 weight
 def convert_to_ewma(df: pd.DataFrame, field_name: str, groupby_fields: list=lambda x: True, ewm_halflife: float=4.2655/3):
@@ -723,11 +814,38 @@ x_names = [
     # , 'tsy_10yr_minus_cpi'
     # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
     # , 'gdp_nom'
-    # , 'netexp_nominal' # Will cause infinite values when used with SHIFT (really any y/y compare)
+    # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
     # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
     # , 'tsy_30yr_yield' # Not much history
     , 'med_family_income_vs_house_price'
     # , 'pers_savings_rt'
+    ]
+
+x_names = [
+    'equity_alloc'
+    , 'tsy_10yr_yield'
+    , 'tsy_5yr_yield'
+    , 'tsy_3mo_yield'
+    , 'cape'
+    # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
+    , 'unempl_rate'
+    , 'empl_construction'
+    , 'sp500_peratio'
+    , 'capacity_util_mfg'
+    , 'capacity_util_chem'
+    , 'gold_fix_3pm'
+    , 'fed_funds_rate'
+    , 'tsy_3m10y_curve'
+    , 'industrial_prod'
+    , 'tsy_10yr_minus_fed_funds_rate'
+    , 'tsy_10yr_minus_cpi'
+    # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
+    # , 'gdp_nom'
+    # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
+    # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
+    # , 'tsy_30yr_yield' # Not much history
+    , 'med_family_income_vs_house_price'
+    , 'pers_savings_rt'
     ]
 
 
@@ -752,11 +870,18 @@ def shift_x_years(s: pd.Series, y: int):
 def impute_if_any_nulls(df):
     if df.isnull().any().any():
         print('Running imputation')
-        solver = fancyimpute.MICE(init_fill_method='random')  # mean, median, or random
-        # solver = fancyimpute.NuclearNormMinimization(error_tolerance=0.001)
-        # solver = fancyimpute.MatrixFactorization()
-        # solver = fancyimpute.IterativeSVD()
-        df = solver.complete(df.values)
+        try:
+            imputer = importlib.import_module("fancyimpute")
+            solver = imputer.MICE(init_fill_method='random') # mean, median, or random
+            # solver = fancyimpute.NuclearNormMinimization()
+            # solver = fancyimpute.MatrixFactorization()
+            # solver = fancyimpute.IterativeSVD()
+            df.loc[:, x_names] = solver.complete(df.loc[:, x_names].values)
+        except ImportError as e:
+            imputer = importlib.import_module("knnimpute")
+            df.loc[:, x_names] = imputer.knn_impute_with_argpartition(df.loc[:, x_names],
+                                                                        missing_mask=np.isnan(df.loc[:, x_names]), k=3)
+        # df = solver.complete(df.values)
     return df
 
 print('Adding x-year diff terms.')
@@ -995,36 +1120,46 @@ ensemble_x_names = list()
 
 if do_predict_returns:
     for yf in returns_predict_years_forward:
-        d = predict_returns(df, x_names, sp_field_name, yf, prune=True)
-        for k,v in d.items():
-            df[k] = v
+        for idx, model_list in enumerate(returns_models):
+            d, report_name = predict_returns(df=df, x_names=x_names
+                                , y_field_name=sp_field_name
+                                , years_forward=yf
+                                , model_name=model_list
+                                , prune=True)
+            for k,v in d.items():
+                df[k] = v
 
-        new_dataset = [v for v in d.values()][-1]
-        new_field_name = 'sp500_{0}yr'.format(yf)
+            new_dataset = [v for v in d.values()][-1]
+            new_field_name = 'sp500_{0}_m{1}'.format(report_name, idx)
 
-        # print(ensemble_df.index)
-        # print(new_dataset.index)
-        new_df = new_dataset.to_frame(name=new_field_name)
-        ensemble_df = ensemble_df.join(new_df, how='right')
-        ensemble_x_names.append(new_field_name)
+            # print(ensemble_df.index)
+            # print(new_dataset.index)
+            new_df = new_dataset.to_frame(name=new_field_name)
+
+            # ensemble_df = ensemble_df.join(new_df, how='right')
+            # ensemble_x_names.append(new_field_name)
 
     # Use the results of the various forward prediction models to construct an ensemble model!!!
-    ensemble_mask = [x >= 5 for x in ensemble_df.loc[:, ensemble_x_names].count(axis=1).values]
-    # ensemble_mask = ensemble_mask.values.tolist() + [True for v in range(ensemble_df.shape[0] - non_null_mask.shape[0])]
-    ensemble_df = ensemble_df.loc[ensemble_mask, :]
+    # ensemble_mask = [x >= 5 for x in ensemble_df.loc[:, ensemble_x_names].count(axis=1).values]
+    # ensemble_df = ensemble_df.loc[ensemble_mask, :]
     # d = predict_ensemble(ensemble_df, ensemble_x_names, sp_field_name)
 
 
 # RECESSION PREDICTIONS
 if do_predict_recessions:
     for yf in recession_predict_years_forward:
-        for m in recession_models:
-            d = predict_recession(df, x_names, recession_field_name, yf, prune=True, model_name=m)
+        for idx, model_list in enumerate(recession_models):
+            d, report_name = predict_recession(df=df
+                                  , x_names=x_names
+                                  , y_field_name=recession_field_name
+                                  , years_forward=yf
+                                  , prune=True
+                                  , model_name=model_list)
             for k,v in d.items():
                 df[k] = v
 
             new_dataset = [v for v in d.values()][-1]
-            new_field_name = 'recession_{0}yr'.format(yf)
+            new_field_name = '{0}_m{1}'.format(report_name, idx)
 
             # print(ensemble_df.index)
             # print(new_dataset.index)

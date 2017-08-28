@@ -20,25 +20,27 @@ import sklearn.feature_extraction.text as sk_text
 import sklearn.preprocessing as sk_prep
 from sklearn import feature_extraction as sk_feat
 from sklearn import feature_selection as sk_feat_sel
-from sklearn.neural_network import MLPClassifier as cmlp
-from sklearn.neural_network import MLPRegressor as rmlp
-from sklearn.linear_model import Ridge as ridge
+from sklearn.neural_network import MLPClassifier
+from sklearn.neural_network import MLPRegressor
+from sklearn.linear_model import Ridge
 from sklearn.model_selection import GridSearchCV
 from sklearn.linear_model import Lasso
 from sklearn.linear_model import ElasticNet
-from sklearn.linear_model.logistic import LogisticRegression as logr
+from sklearn.linear_model.logistic import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.neighbors import KNeighborsRegressor
-from sklearn.cluster import k_means as kmeans
-from sklearn.ensemble import RandomForestClassifier as rfor
-from sklearn.ensemble import GradientBoostingClassifier as gbc
-from sklearn.ensemble import GradientBoostingRegressor as gbr
-from sklearn.ensemble import AdaBoostClassifier as abc
-from sklearn.linear_model import LinearRegression as linreg
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import AdaBoostClassifier
+from sklearn.linear_model import LinearRegression
 from sklearn.linear_model import RidgeClassifier
 from sklearn.svm import LinearSVC
 from sklearn.linear_model import SGDClassifier
+from sklearn.linear_model import SGDRegressor
 from sklearn.linear_model import PassiveAggressiveClassifier
+from sklearn.linear_model import PassiveAggressiveRegressor
 from sklearn.naive_bayes import BernoulliNB, MultinomialNB
 from sklearn.neighbors import NearestCentroid
 from sklearn.svm import SVC as svc
@@ -49,7 +51,7 @@ from sklearn import metrics
 
 pd.options.mode.chained_assignment = None
 
-global use_sparse, verbose, s
+global use_sparse, verbose, s, new_fields
 use_sparse=True
 
 def predict(df: pd.DataFrame
@@ -164,13 +166,15 @@ def predict(df: pd.DataFrame
                 clf = mt
                 model_type[idx], mt = ('custom', 'custom')
             elif mt == 'rfor':
-                clf = rfor(n_estimators=31, class_weight='balanced')
+                clf = RandomForestClassifier(n_estimators=31)
+            elif mt == 'rfor_r':
+                clf = RandomForestRegressor(n_estimators=31)
             elif mt == 'logit':
-                clf = logr(class_weight='balanced')
+                clf = LogisticRegression()
             elif mt == 'linreg':
-                clf = linreg()
+                clf = LinearRegression()
             elif mt == 'ridge':
-                clf = ridge()
+                clf = Ridge()
             elif mt == 'lasso':
                 clf = Lasso()
             elif mt == 'elastic_net':
@@ -178,26 +182,21 @@ def predict(df: pd.DataFrame
             elif mt == 'elastic_net_stacking':
                 clf = ElasticNet(positive=True)  # Used positive=True to make this ideal for stacking
             elif mt == 'neural_c':
-                clf = cmlp(learning_rate_init=0.1, learning_rate='adaptive'
-                           # , max_iter=int(round(x_train.shape[0]/2000, 0))  ## Will cause failure to converge
-                           )
+                clf = MLPClassifier(learning_rate = 'adaptive', learning_rate_init=0.1)
             elif mt == 'neural_r':
-                clf = rmlp(learning_rate_init=0.1, learning_rate='adaptive'
-                           # , max_iter=int(round(x_train.shape[0]/2000, 0))  ## Will cause failure to converge
-                           )
+                clf = MLPRegressor(learning_rate = 'adaptive', learning_rate_init=0.1)
             elif mt == 'svc':
-                clf = svc(kernel='rbf', probability=True, max_iter=1000
-                          , class_weight='balanced')
+                clf = svc(kernel='rbf', probability=True, max_iter=1000)
             elif mt == 'svr_lin':
                 clf = svr(kernel='linear', max_iter=1000)
             elif mt == 'svr_rbf':
                 clf = svr(kernel='rbf', max_iter=1000)
             elif mt == 'gbc':
-                clf = gbc(n_estimators=int(round(x_train.shape[0]/20, 0)))
+                clf = GradientBoostingClassifier(n_estimators=int(round(x_train.shape[0]/20, 0)))
             elif mt == 'gbr':
-                clf = gbr(n_estimators=int(round(x_train.shape[0] / 20, 0)))
+                clf = GradientBoostingRegressor(n_estimators=int(round(x_train.shape[0] / 20, 0)))
             elif mt == 'abc':
-                clf = abc(n_estimators=int(round(x_train.shape[0]/20, 0)))
+                clf = AdaBoostClassifier(n_estimators=int(round(x_train.shape[0]/20, 0)))
             elif mt == 'knn_c':
                 clf = KNeighborsClassifier()
             elif mt == 'knn_r':
@@ -208,8 +207,12 @@ def predict(df: pd.DataFrame
                 clf = LinearSVC()
             elif mt == 'sgd_c':
                 clf = SGDClassifier()
+            elif mt == 'sgd_r':
+                clf = SGDRegressor()
             elif mt == 'pass_agg_c':
                 clf = PassiveAggressiveClassifier()
+            elif mt == 'pass_agg_r':
+                clf = PassiveAggressiveRegressor()
             elif mt == 'bernoulli_nb':
                 clf = BernoulliNB()
             elif mt == 'multinomial_nb':
@@ -220,7 +223,7 @@ def predict(df: pd.DataFrame
                 raise ValueError('Incorrect model_type given. Cannot match [%s] to a model.' % mt)
 
             global use_sparse
-            if isinstance(clf, (gbr)):
+            if isinstance(clf, (GradientBoostingRegressor)):
                 use_sparse = False
 
             else:
@@ -230,6 +233,12 @@ def predict(df: pd.DataFrame
                 clf.random_state = 555
             if hasattr(clf, 'verbose'):
                 clf.verbose = verbose
+            if hasattr(clf, 'class_weight'):
+                clf.class_weight = 'balanced'
+            # if hasattr(clf, 'learning_rate'):
+            #     clf.learning_rate = 'adaptive'
+            # if hasattr(clf, 'learning_rate_init'):
+            #     clf.learning_rate_init = 0.1
 
             mask_all = np.asarray([True for v in range(df.shape[0])], dtype=np.bool)
             # print("NaN in x_train: %s" % np.isnan(x_train.data).any())
@@ -237,7 +246,9 @@ def predict(df: pd.DataFrame
 
             print("\n----- Training Predictive Model -----")
 
-            if isinstance(clf, (ridge, Lasso, SGDClassifier)):
+            # if hasattr(clf, 'alpha'):
+            if isinstance(clf, (RidgeClassifier, Ridge, Lasso, ElasticNet, BernoulliNB, MultinomialNB, SGDClassifier
+                                , SGDRegressor)):
                 # load the diabetes datasets
                 # prepare a range of alpha values to test
                 alphas = [100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0]
@@ -248,22 +259,39 @@ def predict(df: pd.DataFrame
                 grid.fit(x_train, y_train)
                 print(grid)
                 # summarize the results of the grid search
-                print('Linear Regression Best Score:', grid.best_score_)
-                print('Linear Regression Best Alpha:', grid.best_estimator_.alpha)
+                print('Alpha Regression Best Score:', grid.best_score_)
+                print('Alpha Regression Best Alpha:', grid.best_estimator_.alpha)
                 clf.alpha = grid.best_estimator_.alpha
 
-            if isinstance(clf, (LinearSVC, RidgeClassifier)):
+            # if hasattr(clf, 'tol'):
+            if isinstance(clf, (LinearSVC, RidgeClassifier, ElasticNet, PassiveAggressiveRegressor
+                                , PassiveAggressiveClassifier, SGDClassifier, SGDRegressor)):
                 # load the diabetes datasets
                 # prepare a range of alpha values to test
                 tols = [100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0]
                 # create and fit a ridge regression model, testing each alpha
-                grid = GridSearchCV(estimator=clf, param_grid={'tol': tols})
+                grid = GridSearchCV(estimator=clf, param_grid=dict(tol=tols))
                 grid.fit(x_train, y_train)
                 print(grid)
                 # summarize the results of the grid search
-                print('KNN Regression Best Score:', grid.best_score_)
-                print('KNN Regression Best Alpha:', grid.best_estimator_.tol)
+                print('Tol Regression Best Score:', grid.best_score_)
+                print('Tol Regression Best Tol:', grid.best_estimator_.tol)
                 clf.tol = grid.best_estimator_.tol
+
+            # if hasattr(clf, 'power_t'):
+            if isinstance(clf, (SGDClassifier, SGDRegressor)):
+                # load the diabetes datasets
+                # prepare a range of alpha values to test
+                losses = ['hinge', 'log', 'modified_huber', 'squared_hinge', 'perceptron', 'squared_loss', 'huber'
+                    , 'epsilon_insensitive', 'squared_epsilon_insensitive']
+                # create and fit a ridge regression model, testing each alpha
+                grid = GridSearchCV(estimator=clf, param_grid=dict(loss=losses))
+                grid.fit(x_train, y_train)
+                print(grid)
+                # summarize the results of the grid search
+                print('Loss Regression Best Score:', grid.best_score_)
+                print('Loss Regression Best Loss:', grid.best_estimator_.loss)
+                clf.loss = grid.best_estimator_.loss
 
             elif selection_limit < 1.0:
                 scores, p_vals = sk_feat_sel.f_regression(x_train, y_train, center=False)
@@ -333,11 +361,12 @@ def predict(df: pd.DataFrame
                         y_all.append(preds)
 
                 # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
-                y_all = np.hstack(y_all)
+                y_all = np.hstack(y_all).reshape(-1,1)
 
                 # Generate predictions for this predictive model, for all values. Add them to the DF so they can be
                 #  used as predictor variables (e.g. "stacked" upon) later when the next predictive model is run.
                 for k, v in y_field.items():
+                    # y_all = np.atleast_1d(y_all)
                     preds = y_mappings[k].inverse_transform(y_all)
                     print('INTERMEDIATE PREDICTIONS')
                     print(*preds[:10])
@@ -590,8 +619,10 @@ def predict(df: pd.DataFrame
         y_validate.append(preds)
 
     # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
-    y_validate = np.hstack(y_validate)
+    y_validate = np.hstack(y_validate).reshape(-1,1)
 
+    global new_fields
+    new_fields = list()
     if calculate_probs:
         y_validate_probs = np.vstack(y_validate_probs)
         print('ORIGINAL PROBABILITIES')
@@ -599,26 +630,35 @@ def predict(df: pd.DataFrame
         print('ORIGINAL PROBABILITIES (NORMALIZED)')
         print(*[np.around(np.expm1(x), 4) for x in y_validate_probs][:10], sep='\n')
 
-        for m in y_mappings.values():
+        for y_name, m in y_mappings.items():
             df_probs = pd.DataFrame(data=y_validate_probs.round(4)
-                            , columns=['prob_' + f.lower().replace(' ','_') for f in list(m.classes_)[:y_validate_probs.shape[1]]]
+                            , columns=[y_name + '_prob_' + f.lower().replace(' ','_') for f in list(m.classes_)[:y_validate_probs.shape[1]]]
                             , index=df_validate.index)
             # df_validate.reset_index(inplace=True, drop=True)
             df_validate = df_validate.join(df_probs, how='inner')
+            # for col in df_probs.columns.values:
+            #     df_validate[col] = df_probs[col]
+        new_fields.extend(df_probs.columns.values.tolist())
 
     for k, v in y_field.items():
         final_preds = y_mappings[k].inverse_transform(y_validate)
         print('FINAL PREDICTIONS')
         print(*final_preds[:10])
-        df_validate.loc[:, 'pred_' + k] = final_preds
+        y_pred_name = 'pred_' + k
+        df_validate.loc[:, y_pred_name] = final_preds
+        new_fields.extend([y_pred_name])
 
     if predict_all:
         df = df_validate
     else:
         df = df.loc[mask_validate == 0, :].append(df_validate, ignore_index=True)
+        df = df.loc[mask_validate == 0, :].append(df_validate, ignore_index=True)
 
     return df
 
+def get_pred_field_names():
+    global new_fields
+    return new_fields
 
 def resilient_inverse_transform(model: sk_prep.LabelEncoder, preds: np.ndarray):
     try:
