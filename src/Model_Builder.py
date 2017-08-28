@@ -15,6 +15,7 @@ import prettytable
 import pandas as pd
 import pickle
 import bisect
+import decimal
 from scipy import sparse
 from sklearn import exceptions
 import sklearn.feature_extraction.text as sk_text
@@ -157,6 +158,7 @@ def predict(df: pd.DataFrame
             if v == 'cat':
                 y_field[k] = df[k].unique().astype(str)
 
+        data_rows = len(mask_train)
         y_mappings = train_models(df[mask_train], y_field)
         _, y_train, y_mappings = get_vectors(df[mask_train], y_field, y_mappings, is_y=True)
 
@@ -183,7 +185,7 @@ def predict(df: pd.DataFrame
             elif mt == 'linreg':
                 clf = LinearRegression()
             elif mt == 'ridge':
-                clf = Ridge(max_iter=10000)
+                clf = Ridge()
             elif mt == 'lasso':
                 clf = Lasso()
             elif mt == 'elastic_net':
@@ -213,9 +215,9 @@ def predict(df: pd.DataFrame
             elif mt == 'linear_svc':
                 clf = LinearSVC()
             elif mt == 'sgd_c':
-                clf = SGDClassifier(max_iter=1000)
+                clf = SGDClassifier()
             elif mt == 'sgd_r':
-                clf = SGDRegressor(max_iter=1000)
+                clf = SGDRegressor()
             elif mt == 'pass_agg_c':
                 clf = PassiveAggressiveClassifier()
             elif mt == 'pass_agg_r':
@@ -230,8 +232,12 @@ def predict(df: pd.DataFrame
                 raise ValueError('Incorrect model_type given. Cannot match [%s] to a model.' % mt)
 
             global use_sparse
-            if isinstance(clf, (GradientBoostingRegressor)):
+            if isinstance(clf, (GradientBoostingRegressor, KNeighborsClassifier, KNeighborsRegressor)):
                 use_sparse = False
+                if not isinstance(x_train, (np.ndarray)):
+                    x_train = x_train.toarray()
+                if not isinstance(y_train, (np.ndarray)):
+                    y_train = y_train.toarray().reshape(-1, 1)
             else:
                 use_sparse = True
 
@@ -244,7 +250,8 @@ def predict(df: pd.DataFrame
             if 'probability' in clf.get_params().keys():
                 clf.probability = True
             if 'max_iter' in clf.get_params().keys():
-                max_iter = 10000
+                if (not clf.max_iter) or (clf.max_iter < 10000):
+                    clf.max_iter = 10000
             # if 'learning_rate' in clf.get_params().keys():
             #     clf.learning_rate = 'adaptive'
             # if 'learning_rate_init' in clf.get_params().keys():
@@ -310,6 +317,10 @@ def predict(df: pd.DataFrame
                 if 'metric' in clf.get_params().keys():
                     if isinstance(clf, (NearestCentroid)):
                         grid_param_dict['metric'] = ['euclidean', 'manhattan']
+                    if isinstance(clf, (KNeighborsRegressor, KNeighborsClassifier)):
+                        grid_param_dict['metric'] = ['euclidean', 'manhattan', 'minkowski', 'chebyshev']
+                        # NOTE: wminkowski doesn't seem to work in here. Might be a bug in sklearn 0.19.
+                        # NOTE: I deliberately left out seuclidean and mahalanobis because they were too much trouble.
                     else:
                         print('Unspecified parameter "metric" for ', type(clf))
 
@@ -321,94 +332,14 @@ def predict(df: pd.DataFrame
                     except ValueError as e:
                         if 'Invalid parameter ' in str(e):
                             grid_param_dict.pop(str(e).split(' ')[2])
+                        else:
+                            raise e
                         pass
                 print(grid)
                 # summarize the results of the grid search
                 print('Grid Regression Best Score:', grid.best_score_)
                 print('Grid Regression Best Estimator:', grid.best_estimator_)
                 clf = grid.best_estimator_
-
-                # if hasattr(clf, 'alpha'):
-                #     # if isinstance(clf, (RidgeClassifier, Ridge, Lasso, ElasticNet, BernoulliNB, MultinomialNB, SGDClassifier
-                #     #                     , SGDRegressor)):
-                #     try:
-                #         alphas = [100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0]
-                #         if hasattr(clf, 'learning_rate') and clf.learning_rate == 'optimal':
-                #            del alphas[-1]
-                #         # create and fit a ridge regression model, testing each alpha
-                #         grid = GridSearchCV(estimator=clf, param_grid=dict(alpha=alphas))
-                #         grid.fit(x_train, y_train)
-                #         print(grid)
-                #         # summarize the results of the grid search
-                #         print('Alpha Regression Best Score:', grid.best_score_)
-                #         print('Alpha Regression Best Alpha:', grid.best_estimator_.alpha)
-                #         clf.alpha = grid.best_estimator_.alpha
-                #     except ValueError as e:
-                #         print(e)
-                #         pass
-                #
-                # if hasattr(clf, 'tol'):
-                #     # if isinstance(clf, (LinearSVC, RidgeClassifier, ElasticNet, PassiveAggressiveRegressor
-                #     #                     , PassiveAggressiveClassifier, SGDClassifier, SGDRegressor)):
-                #     try:
-                #         vals = [100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0]
-                #         # create and fit a ridge regression model, testing each alpha
-                #         grid = GridSearchCV(estimator=clf, param_grid=dict(tol=vals))
-                #         grid.fit(x_train, y_train)
-                #         print(grid)
-                #         # summarize the results of the grid search
-                #         print('Tol Regression Best Score:', grid.best_score_)
-                #         print('Tol Regression Best Tol:', grid.best_estimator_.tol)
-                #         clf.tol = grid.best_estimator_.tol
-                #     except ValueError as e:
-                #         print(e)
-                #         pass
-                #
-                # if hasattr(clf, 'loss'):
-                #     # if isinstance(clf, (SGDClassifier, SGDRegressor)):
-                #     try:
-                #         vals = ['hinge', 'log', 'modified_huber', 'squared_hinge', 'perceptron', 'squared_loss', 'huber'
-                #             , 'epsilon_insensitive', 'squared_epsilon_insensitive']
-                #         # create and fit a ridge regression model, testing each alpha
-                #         grid = GridSearchCV(estimator=clf, param_grid=dict(loss=vals))
-                #         grid.fit(x_train, y_train)
-                #         print(grid)
-                #         # summarize the results of the grid search
-                #         print('Loss Regression Best Score:', grid.best_score_)
-                #         print('Loss Regression Best Loss:', grid.best_estimator_.loss)
-                #         clf.loss = grid.best_estimator_.loss
-                #     except ValueError as e:
-                #         print(e)
-                #         pass
-                #
-                # if isinstance(clf, (SVC, SVR)):
-                #     try:
-                #         vals = ['linear', 'poly', 'rbf', 'sigmoid']
-                #         # create and fit a ridge regression model, testing each alpha
-                #         grid = GridSearchCV(estimator=clf, param_grid=dict(kernel=vals))
-                #         grid.fit(x_train, y_train)
-                #         print(grid)
-                #         # summarize the results of the grid search
-                #         print('Loss Regression Best Score:', grid.best_score_)
-                #         print('Loss Regression Best Loss:', grid.best_estimator_.kernel)
-                #         clf.kernel = grid.best_estimator_.kernel
-                #     except ValueError as e:
-                #         print(e)
-                #         pass
-                #
-                # # if hasattr(clf, 'metric'):
-                # if isinstance(clf, (NearestCentroid)):
-                #     # load the diabetes datasets
-                #     # prepare a range of alpha values to test
-                #     vals = ['euclidean', 'manhattan']
-                #     # create and fit a ridge regression model, testing each alpha
-                #     grid = GridSearchCV(estimator=clf, param_grid=dict(metric=vals))
-                #     grid.fit(x_train, y_train)
-                #     print(grid)
-                #     # summarize the results of the grid search
-                #     print('Metric Regression Best Score:', grid.best_score_)
-                #     print('Metric Regression Best Loss:', grid.best_estimator_.metric)
-                #     clf.metric = grid.best_estimator_.metric
 
             elif selection_limit < 1.0:
                 scores, p_vals = sk_feat_sel.f_regression(x_train, y_train, center=False)
@@ -817,7 +748,8 @@ def train_models(df: pd.DataFrame
 
         elif t == 'num':
             if use_sparse:
-                vectorizer = sk_prep.MaxAbsScaler()
+                # vectorizer = sk_prep.MaxAbsScaler()
+                vectorizer = sk_prep.StandardScaler(with_mean=False)
             else:
                 vectorizer = sk_prep.StandardScaler()
             # vectorizer = sk_prep.MinMaxScaler()
@@ -998,3 +930,12 @@ def matrix_hstack(m: tuple, return_sparse: bool=None):
 def reverse_enumerate(l):
    for index in reversed(range(len(l))):
       yield index, l[index]
+
+def get_decimals(vals: np.ndarray):
+    max_decimals = max([len(v.split('.')[-1]) for v in vals if (not np.isnan(v)) and '.' in v])
+    l = [v.split('.')[-1]]
+    # x = str(x).rstrip('0')  # returns '56.001'
+    x = decimal.Decimal(x)  # returns Decimal('0.001')
+    x = x.as_tuple().exponent  # returns -3
+    x = abs(x)
+    return x

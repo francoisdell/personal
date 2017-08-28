@@ -36,7 +36,6 @@ from urllib import request
 import io
 import requests
 import importlib
-from sklearn.neighbors import KNeighborsClassifier
 
 returns_predict_years_forward = [5, 9, 10]
 recession_predict_years_forward = [2, 3]
@@ -55,20 +54,19 @@ do_predict_recessions = True
 fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
 
 
-knn = KNeighborsClassifier(n_neighbors=3)
 recession_models = [
-                   ['abc',knn,'bernoulli_nb','nearest_centroid','rfor','ridge_c','gbc','pass_agg_c','sgd_c','logit']  # 2yr: 1  ||  3yr: 3
-                  ,['abc',knn,'bernoulli_nb','nearest_centroid','ridge_c','gbc','sgd_c','logit','rfor','pass_agg_c']  # 2yr: 1  ||  3yr: 1
-                  ,[knn,'bernoulli_nb','ridge_c','rfor','gbc','pass_agg_c','sgd_c','logit','abc','nearest_centroid']  # 2yr: 3  ||  3yr: 0
-                  ,[knn,'ridge_c','gbc','pass_agg_c','sgd_c','rfor','logit','abc','nearest_centroid','bernoulli_nb']  # 2yr: 3  ||  3yr: 1
-                  ,['ridge_c','gbc','pass_agg_c','sgd_c','logit','abc','rfor','nearest_centroid','bernoulli_nb',knn]  # 2yr: 0  ||  3yr: 0
-                  ,['abc','logit','rfor',knn,'bernoulli_nb','nearest_centroid','gbc','pass_agg_c','ridge_c','sgd_c']  # 2yr: 3  ||  3yr: 0
-                  ,['abc','logit',knn,'bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','ridge_c','gbc']  # 2yr: 0  ||  3yr: 1
+                   ['abc','knn_c','bernoulli_nb','nearest_centroid','rfor','gbc','pass_agg_c','sgd_c','logit']  # 2yr: 4  ||  3yr: 2
+                  ,['abc','knn_c','bernoulli_nb','nearest_centroid','gbc','sgd_c','logit','rfor','pass_agg_c']  # 2yr: 3  ||  3yr: 3
+                  ,['knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','sgd_c','logit','abc','nearest_centroid']  # 2yr: 3  ||  3yr: 1
+                  ,['knn_c','gbc','pass_agg_c','sgd_c','rfor','logit','abc','nearest_centroid','bernoulli_nb']  # 2yr: 3  ||  3yr: 1
+                  ,['gbc','pass_agg_c','sgd_c','logit','abc','rfor','nearest_centroid','bernoulli_nb','knn_c']  # 2yr: 2  ||  3yr: 0
+                  ,['abc','logit','rfor','knn_c','bernoulli_nb','nearest_centroid','gbc','pass_agg_c','sgd_c']  # 2yr: 4  ||  3yr: 1
+                  ,['abc','logit','knn_c','bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','gbc']  # 2yr: 2  ||  3yr:
                   ]
 
 ## INTERESTING @ 2 YEARS
 # recession_models = [
-#                   ['abc','neural_c','knn_c','sgd_c','bernoulli_nb','nearest_centroid','ridge_c','pass_agg_c','gbc']
+#                   ['abc','neural_c','knn_c','sgd_c','bernoulli_nb','nearest_centroid','pass_agg_c','gbc']
 #                   ]
 
 # recession_models = ['gbc',
@@ -80,7 +78,7 @@ recession_models = [
 #                   'bernoulli_nb',
 #                   'nearest_centroid',
 #                   'ridge_c',
-#                   ['gbc','abc','knn_c','sgd_c','pass_agg_c','bernoulli_nb','nearest_centroid','ridge_c','neural_c']
+#                   ['gbc','abc','knn_c','sgd_c','pass_agg_c','bernoulli_nb','nearest_centroid','neural_c']
 #                   ]
 
 returns_models = [
