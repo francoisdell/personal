@@ -61,7 +61,7 @@ recession_models = [
                   ,['knn_c','gbc','pass_agg_c','sgd_c','rfor','logit','abc','nearest_centroid','bernoulli_nb']  # 2yr: 3  ||  3yr: 1
                   ,['gbc','pass_agg_c','sgd_c','logit','abc','rfor','nearest_centroid','bernoulli_nb','knn_c']  # 2yr: 2  ||  3yr: 0
                   ,['abc','logit','rfor','knn_c','bernoulli_nb','nearest_centroid','gbc','pass_agg_c','sgd_c']  # 2yr: 4  ||  3yr: 1
-                  ,['abc','logit','knn_c','bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','gbc']  # 2yr: 2  ||  3yr:
+                  ,['abc','logit','knn_c','bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','gbc']  # 2yr: 2  ||  3yr: 1
                   ]
 
 ## INTERESTING @ 2 YEARS
