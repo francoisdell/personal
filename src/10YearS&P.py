@@ -61,9 +61,9 @@ recession_models = [
                   ,['abc',knn,'bernoulli_nb','nearest_centroid','ridge_c','gbc','sgd_c','logit','rfor','pass_agg_c']  # 2yr: 2  ||  3yr: 1
                   ,[knn,'bernoulli_nb','ridge_c','rfor','gbc','pass_agg_c','sgd_c','logit','abc','nearest_centroid']  # 2yr: 1  ||  3yr: 0
                   ,[knn,'ridge_c','gbc','pass_agg_c','sgd_c','rfor','logit','abc','nearest_centroid','bernoulli_nb']  # 2yr: 3  ||  3yr: 1
-                  ,['ridge_c','gbc','pass_agg_c','sgd_c','logit','abc','rfor','nearest_centroid','bernoulli_nb',knn]  # 2yr: 0  ||  3yr:
-                  ,['abc','logit','rfor',knn,'bernoulli_nb','nearest_centroid','gbc','pass_agg_c','ridge_c','sgd_c']  # 2yr: 1  ||  3yr:
-                  ,['abc','logit',knn,'bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','ridge_c','gbc']  # 2yr: 1  ||  3yr:
+                  ,['ridge_c','gbc','pass_agg_c','sgd_c','logit','abc','rfor','nearest_centroid','bernoulli_nb',knn]  # 2yr: 0  ||  3yr: 0
+                  ,['abc','logit','rfor',knn,'bernoulli_nb','nearest_centroid','gbc','pass_agg_c','ridge_c','sgd_c']  # 2yr: 1  ||  3yr: 0
+                  ,['abc','logit',knn,'bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','ridge_c','gbc']  # 2yr: 1  ||  3yr: 1
                   ]
 
 ## INTERESTING @ 2 YEARS
