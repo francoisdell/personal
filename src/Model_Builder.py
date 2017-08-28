@@ -293,6 +293,20 @@ def predict(df: pd.DataFrame
                 print('Loss Regression Best Loss:', grid.best_estimator_.loss)
                 clf.loss = grid.best_estimator_.loss
 
+            # if hasattr(clf, 'power_t'):
+            if isinstance(clf, (NearestCentroid)):
+                # load the diabetes datasets
+                # prepare a range of alpha values to test
+                metrics = ['euclidean', 'manhattan']
+                # create and fit a ridge regression model, testing each alpha
+                grid = GridSearchCV(estimator=clf, param_grid=dict(metric=metrics))
+                grid.fit(x_train, y_train)
+                print(grid)
+                # summarize the results of the grid search
+                print('Loss Regression Best Score:', grid.best_score_)
+                print('Loss Regression Best Loss:', grid.best_estimator_.metric)
+                clf.metric = grid.best_estimator_.metric
+
             elif selection_limit < 1.0:
                 scores, p_vals = sk_feat_sel.f_regression(x_train, y_train, center=False)
                 for x_field_name in list(x_fields.keys()):
