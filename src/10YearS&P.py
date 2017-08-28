@@ -58,12 +58,12 @@ fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
 knn = KNeighborsClassifier(n_neighbors=3)
 recession_models = [
                    ['abc',knn,'bernoulli_nb','nearest_centroid','rfor','ridge_c','gbc','pass_agg_c','sgd_c','logit']  # 2yr: 1  ||  3yr: 3
-                  ,['abc',knn,'bernoulli_nb','nearest_centroid','ridge_c','gbc','sgd_c','logit','rfor','pass_agg_c']  # 2yr: 2  ||  3yr: 1
-                  ,[knn,'bernoulli_nb','ridge_c','rfor','gbc','pass_agg_c','sgd_c','logit','abc','nearest_centroid']  # 2yr: 1  ||  3yr: 0
+                  ,['abc',knn,'bernoulli_nb','nearest_centroid','ridge_c','gbc','sgd_c','logit','rfor','pass_agg_c']  # 2yr: 1  ||  3yr: 1
+                  ,[knn,'bernoulli_nb','ridge_c','rfor','gbc','pass_agg_c','sgd_c','logit','abc','nearest_centroid']  # 2yr: 3  ||  3yr: 0
                   ,[knn,'ridge_c','gbc','pass_agg_c','sgd_c','rfor','logit','abc','nearest_centroid','bernoulli_nb']  # 2yr: 3  ||  3yr: 1
                   ,['ridge_c','gbc','pass_agg_c','sgd_c','logit','abc','rfor','nearest_centroid','bernoulli_nb',knn]  # 2yr: 0  ||  3yr: 0
-                  ,['abc','logit','rfor',knn,'bernoulli_nb','nearest_centroid','gbc','pass_agg_c','ridge_c','sgd_c']  # 2yr: 1  ||  3yr: 0
-                  ,['abc','logit',knn,'bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','ridge_c','gbc']  # 2yr: 1  ||  3yr: 1
+                  ,['abc','logit','rfor',knn,'bernoulli_nb','nearest_centroid','gbc','pass_agg_c','ridge_c','sgd_c']  # 2yr: 3  ||  3yr: 0
+                  ,['abc','logit',knn,'bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','ridge_c','gbc']  # 2yr: 0  ||  3yr: 1
                   ]
 
 ## INTERESTING @ 2 YEARS
@@ -232,7 +232,7 @@ def chart(d, ys, invert, log_scale, save_name=None, title=None):
         plt.title(title)
     else:
         plt.title(list(itertools.chain(*ys))[0])
-
+    print("Showing Plot...")
     plt.show()
     if save_name:
         fig.savefig(save_name)
@@ -882,8 +882,8 @@ def impute_if_any_nulls(df):
             df.loc[:, x_names] = solver.complete(df.loc[:, x_names].values)
         except ImportError as e:
             imputer = importlib.import_module("knnimpute")
-            df.loc[:, x_names] = imputer.knn_impute_with_argpartition(df.loc[:, x_names],
-                                                                        missing_mask=np.isnan(df.loc[:, x_names]), k=3)
+            df.loc[:, x_names] = imputer.knn_impute_with_argpartition(df.loc[:, x_names].values,
+                        missing_mask=np.isnan(df.loc[:, x_names].values), k=3)
         # df = solver.complete(df.values)
     return df
 
