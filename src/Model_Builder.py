@@ -22,31 +22,20 @@ import sklearn.feature_extraction.text as sk_text
 import sklearn.preprocessing as sk_prep
 from sklearn import feature_extraction as sk_feat
 from sklearn import feature_selection as sk_feat_sel
-from sklearn.neural_network import MLPClassifier
-from sklearn.neural_network import MLPRegressor
-from sklearn.linear_model import Ridge
+from sklearn.neural_network import MLPClassifier, MLPRegressor, BernoulliRBM
 from sklearn.model_selection import GridSearchCV
-from sklearn.linear_model import Lasso
-from sklearn.linear_model import ElasticNet
-from sklearn.linear_model.logistic import LogisticRegression
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.neighbors import KNeighborsRegressor
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.ensemble import GradientBoostingClassifier
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.linear_model import SGDClassifier, SGDRegressor, PassiveAggressiveClassifier, PassiveAggressiveRegressor
+from sklearn.linear_model import Lasso, Ridge, ElasticNet
+from sklearn.linear_model.logistic import LogisticRegression, LogisticRegressionCV
+from sklearn.linear_model import LinearRegression, RidgeClassifier, RidgeClassifierCV, BayesianRidge, RidgeCV
+from sklearn.neighbors import KNeighborsClassifier,KNeighborsRegressor
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
 from sklearn.ensemble import AdaBoostClassifier
-from sklearn.linear_model import LinearRegression
-from sklearn.linear_model import RidgeClassifier
 from sklearn.svm import LinearSVC
-from sklearn.linear_model import SGDClassifier
-from sklearn.linear_model import SGDRegressor
-from sklearn.linear_model import PassiveAggressiveClassifier
-from sklearn.linear_model import PassiveAggressiveRegressor
 from sklearn.naive_bayes import BernoulliNB, MultinomialNB
 from sklearn.neighbors import NearestCentroid
-from sklearn.svm import SVC
-from sklearn.svm import SVR
+from sklearn.svm import SVC, SVR, NuSVR, NuSVC
 from sklearn.metrics import r2_score
 from scipy.special import expit
 from sklearn import metrics
@@ -181,11 +170,11 @@ def predict(df: pd.DataFrame
             elif mt == 'rfor_r':
                 clf = RandomForestRegressor(n_estimators=31)
             elif mt == 'logit':
-                clf = LogisticRegression()
+                clf = LogisticRegressionCV()
             elif mt == 'linreg':
                 clf = LinearRegression()
             elif mt == 'ridge':
-                clf = Ridge()
+                clf = RidgeCV()
             elif mt == 'lasso':
                 clf = Lasso()
             elif mt == 'elastic_net':
@@ -200,10 +189,14 @@ def predict(df: pd.DataFrame
                 clf = SVC()
             elif mt == 'svr':
                 clf = SVR()
+            elif mt == 'nu_svc':
+                clf = NuSVC()
+            elif mt == 'nu_svr':
+                clf = NuSVR()
             elif mt == 'gbc':
                 clf = GradientBoostingClassifier(n_estimators=int(round(x_train.shape[0]/20, 0)))
             elif mt == 'gbr':
-                clf = GradientBoostingRegressor(n_estimators=int(round(x_train.shape[0] / 20, 0)))
+                clf = GradientBoostingRegressor(n_estimators=int(round(x_train.shape[0]/20, 0)))
             elif mt == 'abc':
                 clf = AdaBoostClassifier(n_estimators=int(round(x_train.shape[0]/20, 0)))
             elif mt == 'knn_c':
@@ -211,7 +204,7 @@ def predict(df: pd.DataFrame
             elif mt == 'knn_r':
                 clf = KNeighborsRegressor()
             elif mt == 'ridge_c':
-                clf = RidgeClassifier()
+                clf = RidgeClassifierCV()
             elif mt == 'linear_svc':
                 clf = LinearSVC()
             elif mt == 'sgd_c':
@@ -224,6 +217,8 @@ def predict(df: pd.DataFrame
                 clf = PassiveAggressiveRegressor()
             elif mt == 'bernoulli_nb':
                 clf = BernoulliNB()
+            elif mt == 'bernoulli_rbm':
+                clf = BernoulliRBM()
             elif mt == 'multinomial_nb':
                 clf = MultinomialNB()
             elif mt == 'nearest_centroid':
@@ -232,7 +227,7 @@ def predict(df: pd.DataFrame
                 raise ValueError('Incorrect model_type given. Cannot match [%s] to a model.' % mt)
 
             global use_sparse
-            if isinstance(clf, (GradientBoostingRegressor, KNeighborsClassifier, KNeighborsRegressor)):
+            if isinstance(clf, (GradientBoostingRegressor, KNeighborsClassifier, KNeighborsRegressor, SVR)):
                 use_sparse = False
                 if not isinstance(x_train, (np.ndarray)):
                     x_train = x_train.toarray()
@@ -267,9 +262,12 @@ def predict(df: pd.DataFrame
                 grid_param_dict = dict()
                 # ALPHAS
                 if 'alpha' in clf.get_params().keys():
-                    vals = [100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001]
-                    if hasattr(clf, 'learning_rate') and clf.learning_rate == 'optimal':
-                        del vals[-1]
+                    if isinstance(clf, (GradientBoostingRegressor)):
+                        vals = [0.0001, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999, 0.9999]
+                    else:
+                        vals = [100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001]
+                    # if hasattr(clf, 'learning_rate') and clf.learning_rate == 'optimal':
+                    #     del vals[-1]
                     grid_param_dict['alpha'] = vals
 
                 # TOLS
@@ -280,6 +278,14 @@ def predict(df: pd.DataFrame
                 if 'n_neighbors' in clf.get_params().keys():
                     grid_param_dict['n_neighbors'] = [2, 3, 4, 5, 6, 7, 8, 9]
 
+                # SELECTION
+                if 'selection' in clf.get_params().keys():
+                    grid_param_dict['selection'] = ['cyclic','random']
+
+                # SELECTION
+                if 'selection' in clf.get_params().keys():
+                    grid_param_dict['selection'] = ['cyclic', 'random']
+
                 # LOSSES
                 if 'loss' in clf.get_params().keys():
                     if isinstance(clf, (PassiveAggressiveClassifier)):
@@ -287,8 +293,8 @@ def predict(df: pd.DataFrame
                     elif isinstance(clf, (PassiveAggressiveRegressor)):
                         grid_param_dict['loss'] = ['epsilon_insensitive', 'squared_epsilon_insensitive']
                     elif isinstance(clf, (SGDClassifier, SGDRegressor)):
-                        grid_param_dict['loss'] = ['hinge', 'log', 'modified_huber', 'squared_hinge', 'perceptron'
-                                , 'squared_loss', 'huber', 'epsilon_insensitive', 'squared_epsilon_insensitive']
+                        grid_param_dict['loss'] = ['squared_loss', 'huber', 'epsilon_insensitive'
+                            , 'squared_epsilon_insensitive']
                     else:
                         grid_param_dict['loss'] = clf._SUPPORTED_LOSS
 
@@ -309,9 +315,13 @@ def predict(df: pd.DataFrame
                 # KERNELS
                 if 'kernel' in clf.get_params().keys():
                     if isinstance(clf, (SVC, SVR)):
-                        grid_param_dict['kernel'] = ['linear', 'poly', 'rbf', 'sigmoid']
+                        grid_param_dict['kernel'] = ['linear','poly','rbf','sigmoid']  # LINEAR IS 'Work in progress.' as of 0.19
                     else:
                         print('Unspecified parameter "kernel" for ', type(clf))
+
+                    # NU
+                    if 'nu' in clf.get_params().keys():
+                        grid_param_dict['nu'] = [0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999]
 
                 # METRICS
                 if 'metric' in clf.get_params().keys():
@@ -326,7 +336,7 @@ def predict(df: pd.DataFrame
 
                 while True:
                     try:
-                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict)
+                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
                         grid.fit(x_train, y_train)
                         break
                     except ValueError as e:
@@ -748,14 +758,16 @@ def train_models(df: pd.DataFrame
 
         elif t == 'num':
             if use_sparse:
-                # vectorizer = sk_prep.MaxAbsScaler()
-                vectorizer = sk_prep.StandardScaler(with_mean=False)
+                vectorizer = sk_prep.MaxAbsScaler()
+                # vectorizer = sk_prep.StandardScaler(with_mean=False)
             else:
                 vectorizer = sk_prep.StandardScaler()
             # vectorizer = sk_prep.MinMaxScaler()
             vectorizer.fit(df[f].apply(pd.to_numeric, errors='coerce').fillna(0).values.astype(np.float64).reshape(-1, 1))
+
         elif t == 'num_noscale':
             vectorizer = None
+
         else:
             raise ValueError('Invalid column type provided. Choose between: \'num\', \'cat\', and \'doc\'.')
         trained_models[f] = vectorizer
