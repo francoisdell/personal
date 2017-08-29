@@ -48,7 +48,7 @@ do_predict_returns = False
 do_predict_recessions = True
 fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
 ewm_halflife = 4.2655  # 4.2655 corresponds to a 0.125 weight
-imputer = 'knnimpute'
+imputer = 'knnimpute'  # knnimpute is generally much faster so easier to use in many cases
 
 recession_models = [
                    ['abc','knn_c','bernoulli_nb','nearest_centroid','rfor','gbc','pass_agg_c','sgd_c','logit']  # 2yr: 4  ||  3yr: 2

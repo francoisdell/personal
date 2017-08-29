@@ -272,7 +272,7 @@ def predict(df: pd.DataFrame
 
                 # TOLS
                 if 'tol' in clf.get_params().keys():
-                    grid_param_dict['tol'] = [100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001]
+                    grid_param_dict['tol'] = [1000000, 100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001]
 
                 # TOLS
                 if 'n_neighbors' in clf.get_params().keys():
@@ -281,10 +281,6 @@ def predict(df: pd.DataFrame
                 # SELECTION
                 if 'selection' in clf.get_params().keys():
                     grid_param_dict['selection'] = ['cyclic','random']
-
-                # SELECTION
-                if 'selection' in clf.get_params().keys():
-                    grid_param_dict['selection'] = ['cyclic', 'random']
 
                 # LOSSES
                 if 'loss' in clf.get_params().keys():
@@ -945,9 +941,9 @@ def reverse_enumerate(l):
 
 def get_decimals(vals: np.ndarray):
     max_decimals = max([len(v.split('.')[-1]) for v in vals if (not np.isnan(v)) and '.' in v])
-    l = [v.split('.')[-1]]
-    # x = str(x).rstrip('0')  # returns '56.001'
-    x = decimal.Decimal(x)  # returns Decimal('0.001')
-    x = x.as_tuple().exponent  # returns -3
-    x = abs(x)
-    return x
+    # l = [v.split('.')[-1]]
+    # # x = str(x).rstrip('0')  # returns '56.001'
+    # x = decimal.Decimal(x)  # returns Decimal('0.001')
+    # x = x.as_tuple().exponent  # returns -3
+    # x = abs(x)
+    return max_decimals
