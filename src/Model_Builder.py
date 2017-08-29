@@ -12,6 +12,7 @@ from Settings import Settings
 from collections import OrderedDict
 import numpy as np
 import prettytable
+import platform
 import pandas as pd
 import pickle
 import bisect
@@ -282,6 +283,20 @@ def predict(df: pd.DataFrame
                 if 'selection' in clf.get_params().keys():
                     grid_param_dict['selection'] = ['cyclic','random']
 
+                # L1_RATIO
+                if 'l1_ratio' in clf.get_params().keys():
+                    grid_param_dict['l1_ratio'] = [.1, .5, .7, .9, .95, .99, 1]
+
+                # GAMMA
+                if 'gamma' in clf.get_params().keys():
+                    gamma_range = np.logspace(-9, 3, 13)
+                    grid_param_dict['gamma'] = gamma_range
+
+                # C
+                if 'C' in clf.get_params().keys():
+                    C_range = np.logspace(-2, 10, 13)
+                    grid_param_dict['C'] = C_range
+
                 # LOSSES
                 if 'loss' in clf.get_params().keys():
                     if isinstance(clf, (PassiveAggressiveClassifier)):
@@ -332,7 +347,12 @@ def predict(df: pd.DataFrame
 
                 while True:
                     try:
-                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
+                        # grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
+                        if 'windows' in platform.system().lower():
+                            grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict)
+                        else:
+                            grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
+
                         grid.fit(x_train, y_train)
                         break
                     except ValueError as e:
@@ -378,11 +398,11 @@ def predict(df: pd.DataFrame
                     x_all = fix_np_nan(x_all)
 
                     # print(x_validate)
-
+                    calculate_probs = hasattr(clf, 'classes_') \
+                                      and hasattr(clf, 'predict_proba') \
+                                      and not (hasattr(clf, 'loss') and clf.loss == 'hinge')
                     try:
                         preds = clf.predict(x_all)
-                        # if hasattr(clf, 'classes_'):
-                        #     pred_probs = clf.predict_proba(x_all)
                     except TypeError as e:
                         if "dense data is required" in str(e):
                             x_all = x_all.toarray()
@@ -394,14 +414,14 @@ def predict(df: pd.DataFrame
                         print(e)
                         x_all = x_all.reshape(-1, 1)
                         preds = clf.predict(x_all)
-                        # if hasattr(clf, 'classes_'):
-                        #     pred_probs = clf.predict_proba(x_all)
                         pass
                     finally:
+                        if calculate_probs:
+                            pred_probs = clf.predict_proba(x_all)
                         y_all.append(preds)
 
                 # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
-                y_all = np.hstack(y_all).reshape(-1,1)
+                y_all = np.hstack(y_all).reshape(-1, 1)
 
                 # Generate predictions for this predictive model, for all values. Add them to the DF so they can be
                 #  used as predictor variables (e.g. "stacked" upon) later when the next predictive model is run.
@@ -413,6 +433,22 @@ def predict(df: pd.DataFrame
                     pred_x_name = '{0}_pred_{1}'.format(mt, k)
                     df.loc[:, pred_x_name] = preds
                     new_x_fields = {pred_x_name: 'cat' if not isinstance(v, str) else v}
+
+                    calculate_probs = hasattr(clf, 'classes_') \
+                                      and hasattr(clf, 'predict_proba') \
+                                      and not (hasattr(clf, 'loss') and clf.loss == 'hinge')
+                    if calculate_probs:
+                        prob_fields = [k + '_' + mt + '_prob_' + f.lower().replace(' ', '_') for f in
+                                       list(y_mappings[k].classes_)[:pred_probs.shape[1]]]
+                        df_probs = pd.DataFrame(data=pred_probs
+                                                , columns=prob_fields
+                                                , index=df_valid_iter.index)
+                        df_probs = df_probs[df_probs.columns.values[:-1]]
+                        for f in df_probs.columns.values:
+                            new_x_fields[f] = 'num'
+                        df = df.join(df_probs, how='inner')
+
+
                     x_fields = {**x_fields, **new_x_fields}
                     x_mappings = {**x_mappings, **train_models(df[mask_train], new_x_fields)}
                     new_x_columns, new_x_train, x_mappings = get_vectors(df[mask_train], new_x_fields, x_mappings)

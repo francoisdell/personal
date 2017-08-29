@@ -3,42 +3,40 @@ import math
 import pickle
 from datetime import datetime
 from datetime import timedelta
-
 # import fancyimpute
 import matplotlib
 import numpy as np
 import pandas as pd
 import quandl
 import bls
+import operator
 # from matplotlib import rcParams
-import yahoo_finance
+# import yahoo_finance
+import itertools
+from statsmodels import robust
 from fredapi import Fred
 from matplotlib import pyplot as plt
 from matplotlib.ticker import OldScalarFormatter
 from inspect import isfunction
-from bs4 import BeautifulSoup as bs
-import decimal
 from pandas.compat import StringIO
 import requests_cache
-
 import Model_Builder as mb
-
-load_from_file = True
 from collections import OrderedDict
 from typing import Union, Callable
-from lxml import etree
-from urllib import request
 import io
 import requests
 import importlib
 
+rawdata_from_file = True
+finaldata_from_file = False
 returns_predict_years_forward = [9, 10]
 recession_predict_years_forward = [2, 3]
 selection_limit = 1.0e-2
 train_pct = 0.8
 start_dt = '1952-01-01'
 end_dt = datetime.today().strftime('%Y-%m-%d')
-interaction_type = 'level_1'  # Options: all, level_1, none
+interaction_type = None  # Options: all, level_1, None
+correlation_type = 'level_1'  # Options: level_1, None
 use_pca = False
 real = False
 sp_field_name = 'sp500'
@@ -48,16 +46,16 @@ do_predict_returns = False
 do_predict_recessions = True
 fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
 ewm_halflife = 4.2655  # 4.2655 corresponds to a 0.125 weight
-imputer = 'knnimpute'  # knnimpute is generally much faster so easier to use in many cases
+default_imputer = 'fancyimpute'  # knnimpute is generally much faster so easier to use in many cases
 
 recession_models = [
-                   ['abc','knn_c','bernoulli_nb','nearest_centroid','rfor','gbc','pass_agg_c','sgd_c','logit']  # 2yr: 4  ||  3yr: 2
-                  ,['abc','knn_c','bernoulli_nb','nearest_centroid','gbc','sgd_c','logit','rfor','pass_agg_c']  # 2yr: 3  ||  3yr: 3
-                  ,['knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','sgd_c','logit','abc','nearest_centroid']  # 2yr: 3  ||  3yr: 1
-                  ,['knn_c','gbc','pass_agg_c','sgd_c','rfor','logit','abc','nearest_centroid','bernoulli_nb']  # 2yr: 3  ||  3yr: 1
-                  ,['gbc','pass_agg_c','sgd_c','logit','abc','rfor','nearest_centroid','bernoulli_nb','knn_c']  # 2yr: 2  ||  3yr: 0
-                  ,['abc','logit','rfor','knn_c','bernoulli_nb','nearest_centroid','gbc','pass_agg_c','sgd_c']  # 2yr: 4  ||  3yr: 1
-                  ,['abc','logit','knn_c','bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','gbc']  # 2yr: 2  ||  3yr: 1
+                   ['abc','knn_c','bernoulli_nb','nearest_centroid','rfor','gbc','pass_agg_c','sgd_c','ridge_c','logit']  # 2yr: 0  ||  3yr: 0
+                  ,['abc','knn_c','bernoulli_nb','nearest_centroid','gbc','sgd_c','logit','rfor','ridge_c','pass_agg_c']  # 2yr: 1  ||  3yr:
+                  ,['knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','sgd_c','logit','abc','ridge_c','nearest_centroid']  # 2yr: 0  ||  3yr:
+                  ,['knn_c','gbc','pass_agg_c','sgd_c','rfor','logit','abc','nearest_centroid','ridge_c','bernoulli_nb']  # 2yr: 4  ||  3yr:
+                  ,['gbc','pass_agg_c','sgd_c','logit','abc','rfor','nearest_centroid','bernoulli_nb','ridge_c','knn_c']  # 2yr: 0  ||  3yr:
+                  ,['abc','logit','rfor','knn_c','bernoulli_nb','nearest_centroid','gbc','pass_agg_c','ridge_c','sgd_c']  # 2yr: 0  ||  3yr:
+                  ,['abc','logit','knn_c','bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','ridge_c','gbc']  # 2yr: 0  ||  3yr:
                   ]
 
 ## INTERESTING @ 2 YEARS
@@ -91,15 +89,12 @@ returns_models = [
                 ,['rfor_r','svr','sgd_r','gbr','pass_agg_r','knn_r','ridge','elastic_net','neural_r']  # 5yr: 0
                 ]
 
-ensemble_models = ['ridge',
-                   ['knn_r', 'elastic_net_stacking','gbr','neural_r', 'ridge']]
-
 if real:
     sp_field_name += '_real'
 
 #use the list to filter the local namespace
-safe_func_list = ['first', 'last', 'mean']
-safe_funcs = dict([(k, locals().get(k, None)) for k in safe_func_list])
+# safe_func_list = ['first', 'last', 'mean']
+# safe_funcs = dict([(k, locals().get(k, None)) for k in safe_func_list])
 
 def make_qtrly(s: pd.Series, t: str='mean') -> pd.Series:
     s.index = pd.DatetimeIndex(s.index.values)
@@ -132,7 +127,7 @@ def make_qtrly(s: pd.Series, t: str='mean') -> pd.Series:
     # print(s)
     return s
 
-def get_closes(d: list, fld_names: list=['Close','col3']) -> pd.Series:
+def get_closes(d: list, fld_names: list=list(('Close', 'col3'))) -> pd.Series:
     index_list = []
     val_list = []
     date_names = ['Date','col0']
@@ -469,73 +464,6 @@ def predict_recession(df: pd.DataFrame
         , (y_field_name_pred, df[y_field_name_pred])))
         , report_name)
 
-def predict_ensemble(df: pd.DataFrame, x_names: list, y_field_name: str, prune: bool=False):
-
-    train_mask = ~df[y_field_name].isnull()
-    val_mask = df[y_field_name].isnull() & ~df[x_names].isnull().any(axis=1)
-
-    model_list = ensemble_models
-
-    if df[x_names].isnull().any().any():
-        print('Running imputation')
-        try:
-            imputer = importlib.import_module("fancyimpute")
-            solver = imputer.MICE(init_fill_method='random') # mean, median, or random
-            # solver = fancyimpute.NuclearNormMinimization()
-            # solver = fancyimpute.MatrixFactorization()
-            # solver = fancyimpute.IterativeSVD()
-            df.loc[:, x_names] = solver.complete(df.loc[:, x_names].values)
-        except ImportError as e:
-            imputer = importlib.import_module("knnimpute")
-            df.loc[:, x_names] = imputer.knn_impute_with_argpartition(df.loc[:, x_names],
-                                                                        missing_mask=np.isnan(df.loc[:, x_names]), k=3)
-
-    result_field_dict = OrderedDict()
-    #################################
-    # USING THE MODEL BUILDER CLASS #
-    #################################
-    y_field = OrderedDict([(y_field_name, 'num')])
-    x_fields = OrderedDict([(v, 'num') for v in x_names])
-
-    with pd.option_context('display.max_rows', None, 'display.max_columns', None):
-        print(df.to_string())
-
-    for model_name in model_list:
-
-        if not isinstance(model_name, list):
-            model_name = [model_name]
-        report_name = '{0}_{1}'.format(y_field_name, model_name[0] if len(model_name) == 1 else 'stacked')
-        df = mb.predict(df
-                        , x_fields=x_fields
-                        , y_field=y_field
-                        , model_type=model_name
-                        , report_name=report_name
-                        , show_model_tests=True
-                        , retrain_model=True
-                        , selection_limit=selection_limit
-                        , predict_all=True
-                        , verbose=verbose
-                        , train_pct=train_pct
-                        , random_train_test=False
-                        )
-
-        y_field_name_pred = 'pred_{0}'.format(report_name)
-        df.rename(columns={'pred_' + y_field_name: y_field_name_pred}, inplace=True)
-
-        result_field_dict[y_field_name_pred] = df[y_field_name_pred]
-
-    #################################
-
-        df = df.reindex(pd.DatetimeIndex(start=df.index.min(), end=max(df.index), freq='1Q'))
-        chart(df
-              , ys=[[y_field_name, *list(result_field_dict.keys())]]
-              , invert=[False]
-              , log_scale=[True]
-              , save_name='_'.join([y_field_name_pred, model_name])
-              , title='_'.join([y_field_name_pred, model_name]))
-
-    return result_field_dict
-
 def decimal_to_date(d: str):
     year = int(float(d))
     frac = float(d) - year
@@ -549,7 +477,7 @@ def decimal_to_date(d: str):
 class data_source:
     def __init__(self, code: str, provider: Union[str, Callable], rerun: bool=False):
         self.code = code
-        self.data = None
+        self.data = pd.Series()
         self.rerun = rerun
 
         if provider in ('fred', 'yahoo', 'quandl', 'schiller', 'eod_hist', 'bls'):
@@ -612,20 +540,181 @@ class data_source:
                                 )
         print("Collected data for [{0}]".format(self.code))
 
-def get_encoding_type(current_file: str):
-    print("Determining file encoding: [%s]" % current_file)
-    from chardet.universaldetector import UniversalDetector
-    detector = UniversalDetector()
-    detector.reset()
-    for line in open(current_file, 'rb'):
-        detector.feed(line)
-        if detector.done: break
-    detector.close()
-    print(current_file.split('\\')[-1] + ": " + detector.result['encoding'])
-    return detector.result['encoding']
+
+def shift_x_years(s: pd.Series, y: int):
+    return s / s.shift(4*y)
+
+
+def impute_if_any_nulls(df, imputer=default_imputer):
+    if df.isnull().any().any():
+        print('Running imputation')
+        try:
+            if imputer == 'knnimpute':
+                raise ValueError('knnimpute requested')
+            imputer = importlib.import_module("fancyimpute")
+            solver = imputer.MICE(init_fill_method='random') # mean, median, or random
+            # solver = fancyimpute.NuclearNormMinimization()
+            # solver = fancyimpute.MatrixFactorization()
+            # solver = fancyimpute.IterativeSVD()
+            df.loc[:, x_names] = solver.complete(df.loc[:, x_names].values)
+        except (ImportError, ValueError) as e:
+            imputer = importlib.import_module("knnimpute")
+            df.loc[:, x_names] = imputer.knn_impute_with_argpartition(df.loc[:, x_names].values,
+                        missing_mask=np.isnan(df.loc[:, x_names].values), k=5)
+        # df = solver.complete(df.values)
+    return df
+
+
+
+def get_operator_fn(op):
+    return {
+        '+' : operator.add,
+        '-' : operator.sub,
+        '*' : operator.mul,
+        '/' : operator.truediv,
+        '%' : operator.mod,
+        '^' : operator.xor,
+        }[op]
+
+
+def permutations_with_replacement(n, k):
+    for p in itertools.product(n, repeat=k):
+        yield p
+
+
+# Construct level 1 interactions between all x-variables
+def get_level1_interactions(df: pd.DataFrame, x_names: list, min: float=0.1, max: float=0.9):
+    print('Adding interaction terms.')
+    new_x_names = []
+    for k, v in enumerate(x_names[:-1]):
+        for v1 in x_names[k + 1:]:
+            corr = np.corrcoef(df[v], df[v1])[0][1]
+            if min <= abs(corr) <= max:
+                # Interactions between two different fields generated through multiplication
+                interaction_field_name = '{0}_*_{1}'.format(v, v1)
+                if interaction_field_name not in df.columns.values:
+                    df[interaction_field_name] = df[v] * df[v1]
+                new_x_names.append(interaction_field_name)
+
+                # Interactions between two different fields, generated through division
+                interaction_field_name = '{0}_/_{1}'.format(v, v1)
+                if interaction_field_name not in df.columns.values:
+                    df[interaction_field_name] = df[v] / df[v1].replace({0: np.nan})
+                new_x_names.append(interaction_field_name)
+
+                # Interactions between two different fields, generated through exponentiall weighted correlations
+                # interaction_field_name = '{0}_corr_{1}'.format(v, v1)
+                # df[interaction_field_name] = df[v].ewm(halflife=ewm_halflife).corr(other=df[v1])
+                # new_x_names.append(interaction_field_name)
+
+    return df, new_x_names
+
+
+
+def get_diff_std_and_flags(df: pd.DataFrame
+                           , field_name: str
+                           , groupby_fields: list=lambda x: True
+                           , halflife: float=ewm_halflife
+                           , stdev_qty: int=2)\
+        -> (pd.DataFrame, list):
+
+    ewma_field_name = field_name + '_ewma'
+    if ewma_field_name not in df.columns:
+        df[ewma_field_name] = df[field_name].ewm(halflife=ewm_halflife).mean()
+
+    new_name_prefix = field_name + '_val_to_ewma'
+    new_name_diff = new_name_prefix + '_diff'
+    new_name_diff_std = new_name_prefix + '_diff_std'
+    new_name_add_std = new_name_prefix + '_add_std'
+    new_name_sub_std = new_name_prefix + '_sub_std'
+    new_name_trend_fall = new_name_prefix + '_trend_fall_flag'
+    new_name_trend_rise = new_name_prefix + '_trend_rise_flag'
+
+    df[new_name_diff] = df[field_name] - df[ewma_field_name]
+    df[new_name_diff_std] = df.groupby(by=[groupby_fields])[new_name_diff].apply(lambda x: x.ewm(halflife=halflife).std(bias=False))
+    df[new_name_add_std] = df[ewma_field_name] + (stdev_qty * df[new_name_diff_std])
+    df[new_name_sub_std] = df[ewma_field_name] - (stdev_qty * df[new_name_diff_std])
+    df[new_name_sub_std] = df[new_name_sub_std].clip(lower=0)
+    df[new_name_trend_rise] = df[field_name].values < df[new_name_sub_std].values
+    df[new_name_trend_fall] = df[field_name].values > df[new_name_add_std].values
+
+    return df, [new_name_diff, new_name_diff_std, new_name_add_std, new_name_sub_std
+        , new_name_trend_rise, new_name_trend_fall]
+
+
+def time_since_last_true(s: pd.Series) -> pd.Series:
+    s.iloc[0] = prev_val = s.value_counts()[False] / 2 / s.value_counts()[True]
+    for i, v in list(s.iteritems())[1:]:
+        if v:
+            s.set_value(i, 0)
+        else:
+            s.set_value(i, prev_val + 1)
+        prev_val = s.get_value(i)
+    return s
+
+
+def get_level1_correlations(df: pd.DataFrame, x_names: list, top_n: int=-1):
+    # Interactions between two different fields, generated through exponentiall weighted correlations
+    print('Adding correlation terms')
+    new_x_names = []
+    d = dict()
+    for k, v in enumerate(x_names[:-1]):
+        for v1 in x_names[k + 1:]:
+            # Interactions between two different fields, generated through exponentiall weighted correlations
+            interaction_field_name = '{0}_corr_{1}'.format(v, v1)
+            if interaction_field_name not in df.columns.values:
+                # s = pd.ewmcorr(df[v], df[v1], halflife=ewm_halflife)
+                s = df[v].ewm(halflife=ewm_halflife).corr(other=df[v1])
+                # s = df[v].apply(lambda x: x.fillna(0).ewm(halflife=ewm_halflife).corr(other=df[v1]))
+            else:
+                s = df[interaction_field_name]
+            d[interaction_field_name] = (s, s.var())
+
+    if top_n > len(d):
+        top_n = -1
+
+    for name, vals in sorted(d.items(), key=lambda x: x[1][1], reverse=True)[:top_n]:
+        df[name] = vals[0]
+        new_x_names.append(name)
+
+    return df, new_x_names
+
+
+# Construct all possible interactions between x-variables
+def get_all_interactions(new_names: list, curr_name: str=None, series: pd.Series=None):
+    if new_names:
+        next_name = new_names[0]
+        if not curr_name:
+            get_all_interactions(new_names=new_names[1:], curr_name=next_name, series=df[next_name])
+        else:
+            if abs(np.corrcoef(series, df[next_name])[0][1]) <= 0.3:
+                for op in ['*', '/']:
+                    next_curr_name = '{0}_{1}_{2}'.format(curr_name, op, next_name)
+                    next_series = get_operator_fn(op)(series, df[next_name].replace({0: np.nan}))
+                    new_x_names.append(next_curr_name)
+                    df[next_curr_name]= next_series
+                    print("Adding interaction term: {0}".format(next_curr_name))
+                    get_all_interactions(new_names=new_names[1:], curr_name=next_curr_name, series=next_series)
+            else:
+                get_all_interactions(new_names=new_names[1:], curr_name=curr_name, series=series)
+        get_all_interactions(new_names=new_names[1:])
+
+
+def trim_outliers(y: pd.Series, thresh=4):
+    # warning: this function does not check for NAs
+    # nor does it address issues when
+    # more than 50% of your data have identical values
+    mask = ~np.isnan(y)
+    med = np.median(y[mask])
+    mad = robust.mad(y[mask])
+    min_thresh = med - (mad * thresh)
+    max_thresh = med + (mad * thresh)
+    y[y > max_thresh] = max_thresh
+    y[y < min_thresh] = min_thresh
+    return y
+
 
 def calc_equity_alloc() -> pd.Series:
-
     nonfin_biz_equity_liab = fred.get_series('NCBEILQ027S', observation_start=start_dt, observation_end=end_dt)
     nonfin_biz_credit_liab = fred.get_series('BCNSDODNS', observation_start=start_dt, observation_end=end_dt)
     household_nonprofit_credit_liab = fred.get_series('CMDEBT', observation_start=start_dt, observation_end=end_dt)
@@ -662,6 +751,24 @@ def calc_equity_alloc() -> pd.Series:
     )
     return make_qtrly(equity_alloc, 'last')
 
+
+def convert_to_pca(pca_df: pd.DataFrame, field_names: list):
+    from sklearn.decomposition import TruncatedSVD
+    pca_model = TruncatedSVD(n_components=4, random_state=555)
+
+    x_results = pca_model.fit_transform(pca_df.loc[:, field_names]).T
+    print(pca_model.components_)
+    print(pca_model.explained_variance_ratio_)
+
+    x_names_pca = []
+    for idx, component in enumerate(x_results):
+        pca_name = 'pca_{0}'.format(idx)
+        pca_df[pca_name] = component
+        x_names_pca.append(pca_name)
+
+    return x_names_pca
+
+
 def get_nyse_margin_debt() -> pd.Series:
     url = 'http://www.nyxdata.com/nysedata/asp/factbook/table_export_csv.asp?mode=tables&key=50'
     with requests.Session() as s:
@@ -677,6 +784,9 @@ def get_nyse_margin_debt() -> pd.Series:
     print(df)
 
 
+#########################################################################################
+# START THE STUFF
+##########################################################################################
 data_sources = dict()
 data_sources['cpi_urb_nonvol'] = data_source('CPILFESL', 'fred')
 data_sources['netexp_nom'] = data_source('NETEXP', 'fred')
@@ -717,10 +827,12 @@ data_sources['tax_receipts_tot'] = data_source('W006RC1Q027SBEA', 'fred')
 data_sources['recession_usa'] = data_source('USREC', 'fred')
 ds_names = [k for k in data_sources.keys()]
 
+raw_data_file = 'sp500_hist.p'
 try:
-    if load_from_file:
-        with open('sp500_hist.p', 'rb') as f:
+    if rawdata_from_file:
+        with open(raw_data_file, 'rb') as f:
             (data_sources_temp,) = pickle.load(f)
+            print('Per settings, loaded data from file [{0}]'.format(rawdata_from_file))
             for k, v in data_sources.items():
                 if k not in data_sources_temp:
                     print('New data source added: [{0}]'.format(k))
@@ -730,7 +842,7 @@ try:
                     data_sources_temp[k] = data_sources[k]
         data_sources = data_sources_temp
         for k, ds in data_sources.items():
-            if ds.data is None:
+            if len(ds.data) == 0:  # check if data is empty (e.g. if index has a length of 0)
                 ds.collect_data()
             data_sources[k] = ds
 
@@ -742,23 +854,8 @@ except Exception as e:
         ds.collect_data()
         data_sources[k] = ds
 
-with open('sp500_hist.p', 'wb') as f:
+with open(raw_data_file, 'wb') as f:
     pickle.dump((data_sources,), f)
-
-
-from statsmodels import robust
-def trim_outliers(y: pd.Series, thresh=4):
-    # warning: this function does not check for NAs
-    # nor does it address issues when
-    # more than 50% of your data have identical values
-    mask = ~np.isnan(y)
-    med = np.median(y[mask])
-    mad = robust.mad(y[mask])
-    min_thresh = med - (mad * thresh)
-    max_thresh = med + (mad * thresh)
-    y[y > max_thresh] = max_thresh
-    y[y < min_thresh] = min_thresh
-    return y
 
     # modified_z_score = 0.6745 * abs_dev / y_mad
     # modified_z_score[y == m] = 0
@@ -768,309 +865,281 @@ def trim_outliers(y: pd.Series, thresh=4):
 # from pandas_datareader import data, wb
 # lol = data.DataReader(['TSLA'], 'yahoo', start_dt, end_dt)
 
-df = pd.DataFrame()
-for k, ds in data_sources.items():
-    if ds.provider in ('eod_hist', 'fred', 'schiller'):
-        df[k] = make_qtrly(ds.data, 'last')
+final_data_file = 'sp500_final_data.p'
+try:
+    if finaldata_from_file:
+        with open(final_data_file, 'rb') as f:
+            df, x_names = pickle.load(f)
+            print('Per settings, loaded data from file [{0}]'.format(final_data_file))
     else:
-        df[k] = ds.data
+        raise ValueError('Per Settings, Reloading Data From Yahoo Finance/FRED/Everything Else.')
+except Exception as e:
+    print(e)
+    df = pd.DataFrame()
+    for k, ds in data_sources.items():
+        if ds.provider in ('eod_hist', 'fred', 'schiller'):
+            df[k] = make_qtrly(ds.data, 'last')
+        else:
+            df[k] = ds.data
 
-df['tsy_3mo_yield'] = df['tsy_3mo_yield'] / 100.
-df['tsy_5yr_yield'] = df['tsy_5yr_yield'] / 100.
-df['tsy_10yr_yield'] = df['tsy_10yr_yield'] / 100.
-df['tsy_30yr_yield'] = df['tsy_30yr_yield'] / 100.
-df['netexp_pct_of_gdp'] = (df['netexp_nom'] / df['gdp_nom'])
-df['base_minus_fed_res_tot'] = df['monetary_base_tot'] - df['fed_reserves_tot']
-df['med_family_income_vs_house_price'] = df['med_house_price'] / df['med_family_income']
-df['real_med_family_income'] =  df['med_family_income'] / df['cpi_urb_nonvol']
-df['tsy_10yr_minus_cpi'] = df['tsy_10yr_yield'] - df['cpi_urb_nonvol']
-df['tsy_10yr_minus_fed_funds_rate'] = df['tsy_10yr_yield'] - df['fed_funds_rate']
-df['tsy_3m10y_curve'] = df['tsy_3mo_yield'] / df['tsy_10yr_yield']
 
-# 4.2655 corresponds to a 0.125 weight
-def convert_to_ewma(df: pd.DataFrame
-                    , field_name: str
-                    , groupby_fields: list=lambda x: True
-                    , ewm_halflife: float=4.2655/3):
-    ewma_field_name = field_name + '_ewma'
-    df[ewma_field_name] = df[field_name].groupby(by=groupby_fields).apply(lambda x: x.ewm(halflife=ewm_halflife).mean())
-    return df, ewma_field_name
+    df['tsy_3mo_yield'] = df['tsy_3mo_yield'] / 100.
+    df['tsy_5yr_yield'] = df['tsy_5yr_yield'] / 100.
+    df['tsy_10yr_yield'] = df['tsy_10yr_yield'] / 100.
+    df['tsy_30yr_yield'] = df['tsy_30yr_yield'] / 100.
+    df['netexp_pct_of_gdp'] = (df['netexp_nom'] / df['gdp_nom'])
+    df['base_minus_fed_res_tot'] = df['monetary_base_tot'] - df['fed_reserves_tot']
+    df['med_family_income_vs_house_price'] = df['med_house_price'] / df['med_family_income']
+    df['real_med_family_income'] =  df['med_family_income'] / df['cpi_urb_nonvol']
+    df['tsy_10yr_minus_cpi'] = df['tsy_10yr_yield'] - df['cpi_urb_nonvol']
+    df['tsy_10yr_minus_fed_funds_rate'] = df['tsy_10yr_yield'] - df['fed_funds_rate']
+    df['tsy_3m10y_curve'] = df['tsy_3mo_yield'] / df['tsy_10yr_yield']
+
+
+    if do_predict_returns:
+        # FULL LIST FOR LINEAR REGRESSION
+        # x_names = [
+        #     'equity_alloc'
+        #     , 'tsy_10yr_yield'
+        #     , 'tsy_5yr_yield'
+        #     , 'tsy_3mo_yield'
+        #     , 'cape'
+        #     # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
+        #     , 'unempl_rate'
+        #     , 'empl_construction'
+        #     , 'sp500_peratio'
+        #     , 'capacity_util_mfg'
+        #     , 'capacity_util_chem'
+        #     # , 'gold_fix_3pm'
+        #     # , 'fed_funds_rate'
+        #     , 'tsy_3m10y_curve'
+        #     , 'industrial_prod'
+        #     # , 'tsy_10yr_minus_fed_funds_rate'
+        #     # , 'tsy_10yr_minus_cpi'
+        #     # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
+        #     # , 'gdp_nom'
+        #     # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
+        #     # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
+        #     # , 'tsy_30yr_yield' # Not much history
+        #     , 'med_family_income_vs_house_price'
+        #     # , 'pers_savings_rt'
+        #     ]
+
+        x_names = [
+            'equity_alloc'
+            , 'tsy_10yr_yield'
+            # , 'tsy_5yr_yield'
+            # , 'tsy_3mo_yield'
+            , 'cape'
+            # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
+            , 'unempl_rate'
+            # , 'empl_construction'
+            , 'sp500_peratio'
+            # , 'capacity_util_mfg'
+            # , 'capacity_util_chem'
+            # , 'gold_fix_3pm'
+            # , 'fed_funds_rate'
+            # , 'tsy_3m10y_curve'
+            , 'industrial_prod'
+            # , 'tsy_10yr_minus_fed_funds_rate'
+            # , 'tsy_10yr_minus_cpi'
+            # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
+            # , 'gdp_nom'
+            # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
+            # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
+            # , 'tsy_30yr_yield' # Not much history
+            , 'med_family_income_vs_house_price'
+            # , 'pers_savings_rt'
+            ]
+
+    else:
+        x_names = [
+            'equity_alloc'
+            # , 'tsy_10yr_yield'
+            # , 'tsy_5yr_yield'
+            # , 'tsy_3mo_yield'
+            , 'cape'
+            # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
+            , 'unempl_rate'
+            , 'empl_construction'
+            , 'sp500_peratio'
+            , 'capacity_util_mfg'
+            , 'capacity_util_chem'
+            # , 'gold_fix_3pm'
+            , 'fed_funds_rate'
+            , 'tsy_3m10y_curve'
+            , 'industrial_prod'
+            , 'tsy_10yr_minus_fed_funds_rate'
+            , 'tsy_10yr_minus_cpi'
+            # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
+            # , 'gdp_nom'
+            # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
+            # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
+            # , 'tsy_30yr_yield' # Not much history
+            , 'med_family_income_vs_house_price'
+            , 'pers_savings_rt'
+            ]
+
+    empty_cols = [c for c in df.columns.values if all(df[c].isnull())]
+    if len(empty_cols) > 0:
+        raise Exception("Empty columns in final dataframe: {0}".format(empty_cols))
+
+    for v in x_names:
+        min_dt = df[v][~df[v].isnull()].index.values[0]
+        print('Earliest date for series [{0}] is: {1}'.format(v, min_dt))
+
+    # Filter to only periods of history for which there are at least 3 data points in that period. The rest will be imputed.
+    # non_null_mask = ~pd.isnull(df.loc[:, x_names]).all(axis=1).values  # Only periods where ALL data points exist
+    non_null_mask = [x >= 3 for x in df.loc[:, x_names].count(axis=1).values]  # Periods where >=3 data points exist
+    # non_null_mask = ~pd.isnull(df.loc[:, x_names]).any(axis=1).values  # Periods where ANY data points exist
+    df = df.loc[non_null_mask, :]
+
+
+    print('Adding x-year diff terms.')
+    diff_x_names = [
+        'gdp_nom'
+        , 'cape'
+        , 'cpi_urb_nonvol'
+        , 'empl_construction'
+        , 'industrial_prod'
+        , 'housing_starts'
+        , 'housing_supply'
+        , 'med_house_price'
+        , 'med_family_income'
+        , 'unempl_rate'
+        , 'real_med_family_income'
+        , 'combanks_business_loans'
+        , 'combanks_assets_tot'
+        , 'mortage_debt_individuals'
+        , 'real_estate_loans'
+        , 'foreign_dir_invest'
+        , 'pers_savings_rt'
+        # , 'gross_savings'
+        , 'tax_receipts_corp'
+        # , 'fed_funds_rate'
+        # , 'gold_fix_3pm'
+    ]
+
+    # Interactions between a field and its previous values
+    for name in diff_x_names:
+        for y in [1]:
+            diff_field_name = '{0}_{1}yr_diff'.format(name, y)
+            df[diff_field_name] = shift_x_years(df[name], y)
+            x_names.append(diff_field_name)
+
+    # IMPUTE VALUES!!!
+    df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
+
+    # UNCOMMENT IF YOU WANT TO UTILIZE PCA
+    if use_pca:
+        x_names = convert_to_pca(df, x_names)
+
+    # Perform the addition of the interaction terms
+    corr_x_names = None
+    if correlation_type == 'level_1':
+        df, corr_x_names = get_level1_correlations(df=df, x_names=x_names)
+
+    print('Adding new terms.')
+    if interaction_type == 'all':
+        new_x_names = []
+        get_all_interactions(x_names)
+        x_names.extend(new_x_names)
+
+    elif interaction_type == 'level_1':
+        df, inter_x_names = get_level1_interactions(df=df, x_names=x_names)
+        x_names.extend(inter_x_names)
+
+
+
+    print('Converting fields to EWMA fields.')
+    new_x_names = []
+    for v in x_names:
+        new_field_name = v + '_ewma'
+        if new_field_name not in df.columns.values:
+            df[new_field_name] = df[v].ewm(halflife=ewm_halflife).mean()
+        new_x_names.append(new_field_name)
+    x_names = new_x_names
+
+    print('Converting fields to trimmed fields.')
+    new_x_names = []
+    for v in x_names:
+        new_field_name = v + '_trim'
+        if new_field_name not in df.columns.values:
+            df[new_field_name] = trim_outliers(df[v], thresh=4)
+        new_x_names.append(new_field_name)
+    x_names = new_x_names
+
+    # IMPUTE VALUES!!!
+    df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
+
+    # Generate all possible combinations of the imput variables.
+    operations = [('pow2', math.pow, (2,)), ('sqrt', math.sqrt, None)]
+    for suffix, op, var in operations:
+        for v in x_names.copy():
+            new_x_name = '{0}_{1}'.format(v, suffix)
+            df[new_x_name] = df[v].abs().apply(op, args=var) * df[v].apply(lambda x: -1 if x < 0 else 1)
+            x_names.append(new_x_name)
+
+    if corr_x_names:
+        x_names.extend(corr_x_names)
+        # IMPUTE VALUES!!!
+        df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
+
+    df, new_x_names = get_diff_std_and_flags(df, 'sp500')
+    # x_names.extend(new_x_names)
+
+    sp500_qtr_since_last_corr = 'sp500_qtr_since_last_corr'
+    df[sp500_qtr_since_last_corr] = time_since_last_true(df[new_x_names[-1]])
+    x_names.append(sp500_qtr_since_last_corr)
+# print('===== Head =====\n', df.head(5))
+# print('===== Tail =====\n', df.tail(5))
+
+# print(df.head(5))
+# print(df.tail(5))
+
+# df_valid = df.loc[~train_mask, :]
+# predict_years_forward = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+with open(final_data_file, 'wb') as f:
+    pickle.dump((df, x_names), f)
 
 if do_predict_returns:
-    # FULL LIST FOR LINEAR REGRESSION
-    # x_names = [
-    #     'equity_alloc'
-    #     , 'tsy_10yr_yield'
-    #     , 'tsy_5yr_yield'
-    #     , 'tsy_3mo_yield'
-    #     , 'cape'
-    #     # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
-    #     , 'unempl_rate'
-    #     , 'empl_construction'
-    #     , 'sp500_peratio'
-    #     , 'capacity_util_mfg'
-    #     , 'capacity_util_chem'
-    #     # , 'gold_fix_3pm'
-    #     # , 'fed_funds_rate'
-    #     , 'tsy_3m10y_curve'
-    #     , 'industrial_prod'
-    #     # , 'tsy_10yr_minus_fed_funds_rate'
-    #     # , 'tsy_10yr_minus_cpi'
-    #     # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
-    #     # , 'gdp_nom'
-    #     # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
-    #     # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
-    #     # , 'tsy_30yr_yield' # Not much history
-    #     , 'med_family_income_vs_house_price'
-    #     # , 'pers_savings_rt'
-    #     ]
+    for yf in returns_predict_years_forward:
+        for idx, model_list in enumerate(returns_models):
+            d, report_name = predict_returns(df=df, x_names=x_names
+                                , y_field_name=sp_field_name
+                                , years_forward=yf
+                                , model_name=model_list
+                                , prune=True)
+            for k,v in d.items():
+                df[k] = v
 
-    x_names = [
-        'equity_alloc'
-        , 'tsy_10yr_yield'
-        # , 'tsy_5yr_yield'
-        # , 'tsy_3mo_yield'
-        , 'cape'
-        # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
-        , 'unempl_rate'
-        # , 'empl_construction'
-        , 'sp500_peratio'
-        # , 'capacity_util_mfg'
-        # , 'capacity_util_chem'
-        # , 'gold_fix_3pm'
-        # , 'fed_funds_rate'
-        # , 'tsy_3m10y_curve'
-        , 'industrial_prod'
-        # , 'tsy_10yr_minus_fed_funds_rate'
-        # , 'tsy_10yr_minus_cpi'
-        # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
-        # , 'gdp_nom'
-        # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
-        # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
-        # , 'tsy_30yr_yield' # Not much history
-        , 'med_family_income_vs_house_price'
-        # , 'pers_savings_rt'
-        ]
+            new_dataset = [v for v in d.values()][-1]
+            new_field_name = 'sp500_{0}_m{1}'.format(report_name, idx)
 
-else:
-    x_names = [
-        'equity_alloc'
-        # , 'tsy_10yr_yield'
-        # , 'tsy_5yr_yield'
-        # , 'tsy_3mo_yield'
-        , 'cape'
-        # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
-        , 'unempl_rate'
-        , 'empl_construction'
-        , 'sp500_peratio'
-        , 'capacity_util_mfg'
-        , 'capacity_util_chem'
-        # , 'gold_fix_3pm'
-        , 'fed_funds_rate'
-        , 'tsy_3m10y_curve'
-        , 'industrial_prod'
-        , 'tsy_10yr_minus_fed_funds_rate'
-        , 'tsy_10yr_minus_cpi'
-        # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
-        # , 'gdp_nom'
-        # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
-        # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
-        # , 'tsy_30yr_yield' # Not much history
-        , 'med_family_income_vs_house_price'
-        , 'pers_savings_rt'
-        ]
+# RECESSION PREDICTIONS
+if do_predict_recessions:
+    for yf in recession_predict_years_forward:
+        for idx, model_list in enumerate(recession_models):
+            d, report_name = predict_recession(df=df
+                                  , x_names=x_names
+                                  , y_field_name=recession_field_name
+                                  , years_forward=yf
+                                  , prune=True
+                                  , model_name=model_list)
+            for k,v in d.items():
+                df[k] = v
 
-
-empty_cols = [c for c in df.columns.values if all(df[c].isnull())]
-if len(empty_cols) > 0:
-    raise Exception("Empty columns in final dataframe: {0}".format(empty_cols))
-
-for v in x_names:
-    min_dt = df[v][~df[v].isnull()].index.values[0]
-    print('Earliest date for series [{0}] is: {1}'.format(v, min_dt))
-
-
-# If you d
-# non_null_mask = ~pd.isnull(df.loc[:, x_names]).all(axis=1)
-non_null_mask = [x >= 3 for x in df.loc[:, x_names].count(axis=1).values]
-# ensemble_mask = ~pd.isnull(df.loc[:, x_names]).any(axis=1)
-df = df.loc[non_null_mask, :]
-
-def shift_x_years(s: pd.Series, y: int):
-    return s / s.shift(4*y)
-
-def impute_if_any_nulls(df, imputer='knnimpute'):
-    if df.isnull().any().any():
-        print('Running imputation')
-        try:
-            if imputer == 'knnimpute':
-                raise ValueError('knnimpute requested')
-            imputer = importlib.import_module("fancyimpute")
-            solver = imputer.MICE(init_fill_method='random') # mean, median, or random
-            # solver = fancyimpute.NuclearNormMinimization()
-            # solver = fancyimpute.MatrixFactorization()
-            # solver = fancyimpute.IterativeSVD()
-            df.loc[:, x_names] = solver.complete(df.loc[:, x_names].values)
-        except (ImportError, ValueError) as e:
-            imputer = importlib.import_module("knnimpute")
-            df.loc[:, x_names] = imputer.knn_impute_with_argpartition(df.loc[:, x_names].values,
-                        missing_mask=np.isnan(df.loc[:, x_names].values), k=5)
-        # df = solver.complete(df.values)
-    return df
-
-print('Adding x-year diff terms.')
-diff_x_names = [
-    # 'gdp_nom'
-    'cape'
-    , 'cpi_urb_nonvol'
-    , 'empl_construction'
-    , 'industrial_prod'
-    , 'housing_starts'
-    , 'housing_supply'
-    , 'med_house_price'
-    , 'med_family_income'
-    , 'unempl_rate'
-    , 'real_med_family_income'
-    , 'combanks_business_loans'
-    # , 'combanks_assets_tot'
-    , 'mortage_debt_individuals'
-    , 'real_estate_loans'
-    # , 'foreign_dir_invest'
-    # , 'pers_savings_rt'
-    # , 'gross_savings'
-    , 'tax_receipts_corp'
-    # , 'fed_funds_rate'
-    # , 'gold_fix_3pm'
-]
-
-# Interactions between a field and its previous values
-for name in diff_x_names:
-    for y in [1]:
-        diff_field_name = '{0}_{1}yr_diff'.format(name, y)
-        df[diff_field_name] = shift_x_years(df[name], y)
-        x_names.append(diff_field_name)
-
-# IMPUTE VALUES!!!
-df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=imputer)
-
-def convert_to_pca(pca_df: pd.DataFrame, field_names: list):
-    from sklearn.decomposition import TruncatedSVD
-    pca_model = TruncatedSVD(n_components=4, random_state=555)
-
-    x_results = pca_model.fit_transform(pca_df.loc[:, field_names]).T
-    print(pca_model.components_)
-    print(pca_model.explained_variance_ratio_)
-
-    x_names_pca = []
-    for idx, component in enumerate(x_results):
-        pca_name = 'pca_{0}'.format(idx)
-        pca_df[pca_name] = component
-        x_names_pca.append(pca_name)
-
-    return x_names_pca
-
-# UNCOMMENT IF YOU WANT TO UTILIZE PCA
-if use_pca:
-    x_names = convert_to_pca(df, x_names)
-
-import operator
-def get_operator_fn(op):
-    return {
-        '+' : operator.add,
-        '-' : operator.sub,
-        '*' : operator.mul,
-        '/' : operator.truediv,
-        '%' : operator.mod,
-        '^' : operator.xor,
-        }[op]
-
-import itertools
-
-def permutations_with_replacement(n, k):
-    for p in itertools.product(n, repeat=k):
-        yield p
+            new_dataset = [v for v in d.values()][-1]
+            new_field_name = '{0}_m{1}'.format(report_name, idx)
 
 
 
-# Construct level 1 interactions between all x-variables
-def get_level1_interactions(df: pd.DataFrame, x_names: list, min: float=0.1, max: float=0.9):
-    print('Adding interaction terms.')
-    new_x_names = []
-    for k, v in enumerate(x_names[:-1]):
-        for v1 in x_names[k + 1:]:
-            corr = np.corrcoef(df[v], df[v1])[0][1]
-            if min <= abs(corr) <= max:
-                # Interactions between two different fields generated through multiplication
-                interaction_field_name = '{0}_*_{1}'.format(v, v1)
-                df[interaction_field_name] = df[v] * df[v1]
-                new_x_names.append(interaction_field_name)
 
-                # Interactions between two different fields, generated through division
-                interaction_field_name = '{0}_/_{1}'.format(v, v1)
-                df[interaction_field_name] = df[v] / df[v1].replace({0: np.nan})
-                new_x_names.append(interaction_field_name)
 
-                # Interactions between two different fields, generated through exponentiall weighted correlations
-                # interaction_field_name = '{0}_corr_{1}'.format(v, v1)
-                # df[interaction_field_name] = df[v].ewm(halflife=ewm_halflife).corr(other=df[v1])
-                # new_x_names.append(interaction_field_name)
 
-    return df, new_x_names
 
-def get_level1_correlations(df: pd.DataFrame, x_names: list, top_n: int=-1):
-    # Interactions between two different fields, generated through exponentiall weighted correlations
-    print('Adding correlation terms')
-    new_x_names = []
-    d = dict()
-    for k, v in enumerate(x_names[:-1]):
-        for v1 in x_names[k + 1:]:
-            # Interactions between two different fields, generated through exponentiall weighted correlations
-            interaction_field_name = '{0}_corr_{1}'.format(v, v1)
-            # s = pd.ewmcorr(df[v], df[v1], halflife=ewm_halflife)
-            s = df[v].ewm(halflife=ewm_halflife).corr(other=df[v1])
-            # s = df[v].apply(lambda x: x.fillna(0).ewm(halflife=ewm_halflife).corr(other=df[v1]))
-            d[interaction_field_name] = (s, s.var())
-
-    if top_n > len(d):
-        top_n = -1
-
-    for name, vals in sorted(d.items(), key=lambda x: x[1][1], reverse=True)[:top_n]:
-        df[name] = vals[0]
-        new_x_names.append(name)
-
-    return df, new_x_names
-
-# Construct all possible interactions between x-variables
-def get_all_interactions(new_names: list, curr_name: str=None, series: pd.Series=None):
-    if new_names:
-        next_name = new_names[0]
-        if not curr_name:
-            get_all_interactions(new_names=new_names[1:], curr_name=next_name, series=df[next_name])
-        else:
-            if abs(np.corrcoef(series, df[next_name])[0][1]) <= 0.3:
-                for op in ['*', '/']:
-                    next_curr_name = '{0}_{1}_{2}'.format(curr_name, op, next_name)
-                    next_series = get_operator_fn(op)(series, df[next_name].replace({0: np.nan}))
-                    new_x_names.append(next_curr_name)
-                    df[next_curr_name]= next_series
-                    print("Adding interaction term: {0}".format(next_curr_name))
-                    get_all_interactions(new_names=new_names[1:], curr_name=next_curr_name, series=next_series)
-            else:
-                get_all_interactions(new_names=new_names[1:], curr_name=curr_name, series=series)
-        get_all_interactions(new_names=new_names[1:])
-
-# Perform the addition of the interaction terms
-corr_x_names = None
-print('Adding new terms.')
-if interaction_type == 'all':
-    new_x_names = []
-    get_all_interactions(x_names)
-    x_names.extend(new_x_names)
-
-elif interaction_type == 'level_1':
-    df, corr_x_names = get_level1_correlations(df=df, x_names=x_names)
-    df, inter_x_names = get_level1_interactions(df=df, x_names=x_names)
-    x_names.extend(inter_x_names)
+##### OLD STUFF
 
 # CREATE CORRELATION MATRIX AND
 
@@ -1095,141 +1164,3 @@ elif interaction_type == 'level_1':
 #                 new_x_names.append(new_name)
 #                 df[new_name] = new_series
 # x_names.extend(new_x_names)
-
-print('Converting fields to EWMA fields.')
-new_x_names = []
-for v in x_names:
-    df, ewma_field_name = convert_to_ewma(df, v)
-    new_x_names.append(ewma_field_name)
-x_names = new_x_names
-
-new_x_names = []
-print('Converting fields to trimmed fields.')
-for v in x_names:
-    new_x_name = v + '_trim'
-    df[new_x_name] = trim_outliers(df[v], thresh=4)
-    new_x_names.append(new_x_name)
-x_names = new_x_names
-
-# IMPUTE VALUES!!!
-df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=imputer)
-
-# Generate all possible combinations of the imput variables.
-operations = [('pow2', math.pow, (2,)), ('sqrt', math.sqrt, None)]
-for suffix, op, var in operations:
-    for v in x_names.copy():
-        new_x_name = '{0}_{1}'.format(v, suffix)
-        df[new_x_name] = df[v].abs().apply(op, args=var) * df[v].apply(lambda x: -1 if x < 0 else 1)
-        x_names.append(new_x_name)
-
-if corr_x_names:
-    x_names.extend(corr_x_names)
-    # IMPUTE VALUES!!!
-    df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=imputer)
-
-def get_diff_std_and_flags(df: pd.DataFrame
-                           , field_name: str
-                           , groupby_fields: list=lambda x: True
-                           , ewm_halflife: float=4.2655
-                           , stdev_qty: int=2)\
-        -> (pd.DataFrame, list):
-
-    ewma_field_name = field_name + '_ewma'
-    if ewma_field_name not in df.columns:
-        df, ewma_field_name = convert_to_ewma(df,field_name, groupby_fields)
-
-    new_name_prefix = field_name + '_val_to_ewma'
-    new_name_diff = new_name_prefix + '_diff'
-    new_name_diff_std = new_name_prefix + '_diff_std'
-    new_name_add_std = new_name_prefix + '_add_std'
-    new_name_sub_std = new_name_prefix + '_sub_std'
-    new_name_trend_fall = new_name_prefix + '_trend_fall_flag'
-    new_name_trend_rise = new_name_prefix + '_trend_rise_flag'
-
-    df[new_name_diff] = df[field_name] - df[ewma_field_name]
-    df[new_name_diff_std] = df.groupby(by=[groupby_fields])[new_name_diff].apply(lambda x: x.ewm(halflife=ewm_halflife).std(bias=False))
-    df[new_name_add_std] = df[ewma_field_name] + (stdev_qty * df[new_name_diff_std])
-    df[new_name_sub_std] = df[ewma_field_name] - (stdev_qty * df[new_name_diff_std])
-    df[new_name_sub_std] = df[new_name_sub_std].clip(lower=0)
-    df[new_name_trend_rise] = df[field_name].values < df[new_name_sub_std].values
-    df[new_name_trend_fall] = df[field_name].values > df[new_name_add_std].values
-
-    return df, [new_name_diff, new_name_diff_std, new_name_add_std, new_name_sub_std
-        , new_name_trend_rise, new_name_trend_fall]
-
-def time_since_last_true(s: pd.Series) -> pd.Series:
-    s.iloc[0] = prev_val = s.value_counts()[False] / 2 / s.value_counts()[True]
-    for i, v in list(s.iteritems())[1:]:
-        if v:
-            s.set_value(i, 0)
-        else:
-            s.set_value(i, prev_val + 1)
-        prev_val = s.get_value(i)
-    return s
-
-df, new_x_names = get_diff_std_and_flags(df, 'sp500')
-# x_names.extend(new_x_names)
-
-sp500_qtr_since_last_corr = 'sp500_qtr_since_last_corr'
-df[sp500_qtr_since_last_corr] = time_since_last_true(df[new_x_names[-1]])
-# x_names.append(sp500_qtr_since_last_corr)
-# print('===== Head =====\n', df.head(5))
-# print('===== Tail =====\n', df.tail(5))
-
-# print(df.head(5))
-# print(df.tail(5))
-
-# df_valid = df.loc[~train_mask, :]
-# predict_years_forward = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
-
-ensemble_df = pd.DataFrame(df[sp_field_name], index=df.index, columns=[sp_field_name])
-ensemble_x_names = list()
-
-if do_predict_returns:
-    for yf in returns_predict_years_forward:
-        for idx, model_list in enumerate(returns_models):
-            d, report_name = predict_returns(df=df, x_names=x_names
-                                , y_field_name=sp_field_name
-                                , years_forward=yf
-                                , model_name=model_list
-                                , prune=True)
-            for k,v in d.items():
-                df[k] = v
-
-            new_dataset = [v for v in d.values()][-1]
-            new_field_name = 'sp500_{0}_m{1}'.format(report_name, idx)
-
-            # print(ensemble_df.index)
-            # print(new_dataset.index)
-            new_df = new_dataset.to_frame(name=new_field_name)
-
-            # ensemble_df = ensemble_df.join(new_df, how='right')
-            # ensemble_x_names.append(new_field_name)
-
-    # Use the results of the various forward prediction models to construct an ensemble model!!!
-    # ensemble_mask = [x >= 5 for x in ensemble_df.loc[:, ensemble_x_names].count(axis=1).values]
-    # ensemble_df = ensemble_df.loc[ensemble_mask, :]
-    # d = predict_ensemble(ensemble_df, ensemble_x_names, sp_field_name)
-
-
-# RECESSION PREDICTIONS
-if do_predict_recessions:
-    for yf in recession_predict_years_forward:
-        for idx, model_list in enumerate(recession_models):
-            d, report_name = predict_recession(df=df
-                                  , x_names=x_names
-                                  , y_field_name=recession_field_name
-                                  , years_forward=yf
-                                  , prune=True
-                                  , model_name=model_list)
-            for k,v in d.items():
-                df[k] = v
-
-            new_dataset = [v for v in d.values()][-1]
-            new_field_name = '{0}_m{1}'.format(report_name, idx)
-
-            # print(ensemble_df.index)
-            # print(new_dataset.index)
-            new_df = new_dataset.to_frame(name=new_field_name)
-
-

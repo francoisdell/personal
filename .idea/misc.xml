@@ -1,4 +1,18 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.5.0 (/Library/Frameworks/Python.framework/Versions/3.5/bin/python3.5)" project-jdk-type="Python SDK" />
+  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.6.1 (C:\Users\mackea1\AppData\Local\Continuum\Anaconda3\python.exe)" project-jdk-type="Python SDK" />
+  <component name="SvnBranchConfigurationManager">
+    <option name="myConfigurationMap">
+      <map>
+        <entry key="C:/vmax_analytics">
+          <value>
+            <SvnBranchConfiguration>
+              <option name="trunkUrl" value="svn://10.246.111.30/var/svn-repos/vmax_analytics" />
+            </SvnBranchConfiguration>
+          </value>
+        </entry>
+      </map>
+    </option>
+    <option name="mySupportsUserInfoFilter" value="true" />
+  </component>
 </project>
