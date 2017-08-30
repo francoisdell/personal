@@ -26,13 +26,13 @@ from sklearn import feature_selection as sk_feat_sel
 from sklearn.neural_network import MLPClassifier, MLPRegressor, BernoulliRBM
 from sklearn.model_selection import GridSearchCV
 from sklearn.linear_model import SGDClassifier, SGDRegressor, PassiveAggressiveClassifier, PassiveAggressiveRegressor
-from sklearn.linear_model import Lasso, Ridge, ElasticNet
-from sklearn.linear_model.logistic import LogisticRegression, LogisticRegressionCV
-from sklearn.linear_model import LinearRegression, RidgeClassifier, RidgeClassifierCV, BayesianRidge, RidgeCV
+from sklearn.linear_model import Lasso, Ridge, ElasticNet, MultiTaskLasso, OrthogonalMatchingPursuit
+from sklearn.linear_model.logistic import LogisticRegression
+from sklearn.linear_model import LinearRegression, RidgeClassifier, BayesianRidge, Lars, LassoLars
 from sklearn.neighbors import KNeighborsClassifier,KNeighborsRegressor
-from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor
-from sklearn.ensemble import AdaBoostClassifier
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, ExtraTreesClassifier
+from sklearn.ensemble import GradientBoostingClassifier, GradientBoostingRegressor, ExtraTreesRegressor
+from sklearn.ensemble import AdaBoostClassifier, RandomTreesEmbedding
 from sklearn.svm import LinearSVC
 from sklearn.naive_bayes import BernoulliNB, MultinomialNB
 from sklearn.neighbors import NearestCentroid
@@ -170,14 +170,30 @@ def predict(df: pd.DataFrame
                 clf = RandomForestClassifier(n_estimators=31)
             elif mt == 'rfor_r':
                 clf = RandomForestRegressor(n_estimators=31)
+            elif mt == 'rtree':
+                clf = RandomTreesEmbedding()
+            elif mt == 'etree_r':
+                clf = ExtraTreesRegressor()
+            elif mt == 'etree_c':
+                clf = ExtraTreesClassifier()
             elif mt == 'logit':
-                clf = LogisticRegressionCV()
+                clf = LogisticRegression()
             elif mt == 'linreg':
                 clf = LinearRegression()
             elif mt == 'ridge':
-                clf = RidgeCV()
+                clf = Ridge()
+            elif mt == 'ridge_c':
+                clf = RidgeClassifier()
+            elif mt == 'lars':
+                clf = Lars()
             elif mt == 'lasso':
                 clf = Lasso()
+            elif mt == 'lasso_lars':
+                clf = LassoLars()
+            elif mt == 'lasso_mt':
+                clf = MultiTaskLasso()
+            elif mt == 'omp':
+                clf = OrthogonalMatchingPursuit()
             elif mt == 'elastic_net':
                 clf = ElasticNet()
             elif mt == 'elastic_net_stacking':
@@ -204,8 +220,6 @@ def predict(df: pd.DataFrame
                 clf = KNeighborsClassifier()
             elif mt == 'knn_r':
                 clf = KNeighborsRegressor()
-            elif mt == 'ridge_c':
-                clf = RidgeClassifierCV()
             elif mt == 'linear_svc':
                 clf = LinearSVC()
             elif mt == 'sgd_c':
@@ -228,7 +242,8 @@ def predict(df: pd.DataFrame
                 raise ValueError('Incorrect model_type given. Cannot match [%s] to a model.' % mt)
 
             global use_sparse
-            if isinstance(clf, (GradientBoostingRegressor, KNeighborsClassifier, KNeighborsRegressor, SVR)):
+            if isinstance(clf, (GradientBoostingRegressor, KNeighborsClassifier, KNeighborsRegressor, SVR
+                                , MultiTaskLasso, LassoLars)):
                 use_sparse = False
                 if not isinstance(x_train, (np.ndarray)):
                     x_train = x_train.toarray()
@@ -241,8 +256,6 @@ def predict(df: pd.DataFrame
                 clf.random_state = 555
             if 'verbose' in clf.get_params().keys():
                 clf.verbose = verbose
-            if 'class_weight' in clf.get_params().keys():
-                clf.class_weight = 'balanced'
             if 'probability' in clf.get_params().keys():
                 clf.probability = True
             if 'max_iter' in clf.get_params().keys():
@@ -257,10 +270,19 @@ def predict(df: pd.DataFrame
             # print("NaN in x_train: %s" % np.isnan(x_train.data).any())
             # print("NaN in y_train: %s" % np.isnan(y_train.data).any())
 
-            print("\n----- Training Predictive Model -----")
+            print("\n----- Training Predictive Model [{0}] -----".format(mt))
 
             if mt != 'custom':
                 grid_param_dict = dict()
+
+                # CLASS_WEIGHT
+                if 'class_weight' in clf.get_params().keys():
+                    clf.class_weight = 'balanced'
+
+                # BOOTSTRAP
+                if 'bootstrap' in clf.get_params().keys():
+                    clf.bootstrap = True
+
                 # ALPHAS
                 if 'alpha' in clf.get_params().keys():
                     if isinstance(clf, (GradientBoostingRegressor)):
@@ -272,10 +294,10 @@ def predict(df: pd.DataFrame
                     grid_param_dict['alpha'] = vals
 
                 # TOLS
-                if 'tol' in clf.get_params().keys():
-                    grid_param_dict['tol'] = [1000000, 100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001]
+                # if 'tol' in clf.get_params().keys():
+                #     grid_param_dict['tol'] = [0.1, 0.01, 0.001, 0.0001, 0.00001]
 
-                # TOLS
+                # N_NEIGHBORS
                 if 'n_neighbors' in clf.get_params().keys():
                     grid_param_dict['n_neighbors'] = [2, 3, 4, 5, 6, 7, 8, 9]
 
@@ -294,7 +316,7 @@ def predict(df: pd.DataFrame
 
                 # C
                 if 'C' in clf.get_params().keys():
-                    C_range = np.logspace(-2, 10, 13)
+                    C_range = np.logspace(0, 10, 11)
                     grid_param_dict['C'] = C_range
 
                 # LOSSES
@@ -330,9 +352,9 @@ def predict(df: pd.DataFrame
                     else:
                         print('Unspecified parameter "kernel" for ', type(clf))
 
-                    # NU
-                    if 'nu' in clf.get_params().keys():
-                        grid_param_dict['nu'] = [0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999]
+                # NU
+                if 'nu' in clf.get_params().keys():
+                    grid_param_dict['nu'] = [0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999]
 
                 # METRICS
                 if 'metric' in clf.get_params().keys():
@@ -379,12 +401,12 @@ def predict(df: pd.DataFrame
                 x_train = fix_np_nan(x_train)
 
             clf.fit(x_train, y_train)
-            print("------ Model Training Complete ------\n")
+            print("------ Model Training Complete [{0}] ------\n".format(mt))
 
 
             # Loop until you reach the very last predictive model, iteratively adding the predictions from each model
             #  to the dataframe and including those predictions in each successive model training process
-            if idx < len(model_type)-1:
+            if idx < len(model_type) -1:
                 max_slice_size = 100000
                 y_all = list()
                 # y_all_probs = list()
@@ -429,25 +451,30 @@ def predict(df: pd.DataFrame
                     # y_all = np.atleast_1d(y_all)
                     preds = y_mappings[k].inverse_transform(y_all)
                     print('INTERMEDIATE PREDICTIONS')
-                    print(*preds[:10])
-                    pred_x_name = '{0}_pred_{1}'.format(mt, k)
-                    df.loc[:, pred_x_name] = preds
-                    new_x_fields = {pred_x_name: 'cat' if not isinstance(v, str) else v}
+                    print("First 10: ", *preds[:10])
+                    print("Last 10: ", *preds[-10:])
 
-                    calculate_probs = hasattr(clf, 'classes_') \
-                                      and hasattr(clf, 'predict_proba') \
-                                      and not (hasattr(clf, 'loss') and clf.loss == 'hinge')
+
+                    new_x_fields = {}
                     if calculate_probs:
-                        prob_fields = [k + '_' + mt + '_prob_' + f.lower().replace(' ', '_') for f in
+                        prob_field_names = [k + '_' + mt + '_prob_' + f.lower().replace(' ', '_') for f in
                                        list(y_mappings[k].classes_)[:pred_probs.shape[1]]]
+                        prob_field_names = [get_unique_name(v, df.columns.values) for v in prob_field_names]
                         df_probs = pd.DataFrame(data=pred_probs
-                                                , columns=prob_fields
+                                                , columns=prob_field_names
                                                 , index=df_valid_iter.index)
-                        df_probs = df_probs[df_probs.columns.values[:-1]]
+                        df_probs = df_probs.loc[:, df_probs.columns.values[:-1]]
                         for f in df_probs.columns.values:
                             new_x_fields[f] = 'num'
                         df = df.join(df_probs, how='inner')
+                        print('Unique probabilities: ', len(np.unique(pred_probs)))
+                        print('Probability variance: ', np.var(pred_probs))
 
+                    else:
+                        pred_field_name = get_unique_name('{0}_pred_{1}'.format(k, mt), df.columns.values)
+                        df[pred_field_name] = preds
+                        new_x_fields[pred_field_name] = 'cat' if not isinstance(v, str) else v
+                        print('Unique predictions: ', len(np.unique(preds)))
 
                     x_fields = {**x_fields, **new_x_fields}
                     x_mappings = {**x_mappings, **train_models(df[mask_train], new_x_fields)}
@@ -456,6 +483,13 @@ def predict(df: pd.DataFrame
                     new_x_train = fix_np_nan(new_x_train)
                     # new_x_train = sparse.csc_matrix(np.hstack(new_x_train))
                     x_train = matrix_hstack((x_train, new_x_train), return_sparse=True)
+
+            if hasattr(clf, 'intercept_') and (isinstance(clf.intercept_, (list)) and len(clf.intercept_) == 1):
+                print('--- Model over-normalization testing ---\n'
+                      'Intercept/Expit/Exp = {0} / {1} / {2}'
+                      .format(format(clf.intercept_[0], '.4f')
+                              , format(expit(clf.intercept_[0]), '.4f')
+                              , format(exp(clf.intercept_[0])), '.4f'))
 
         try:
             with open(predictive_model_file, 'wb') as pickle_file:
@@ -466,6 +500,9 @@ def predict(df: pd.DataFrame
         with open(mappings_file, 'wb') as pickle_file:
             pickle.dump((x_mappings, y_mappings), pickle_file)
 
+    print("--------------------------\n"
+          "-- TEST SET APPLICATION --\n"
+          "--------------------------")
     if show_model_tests:
         x_columns, x_test, x_mappings = get_vectors(df[mask_test], x_fields, x_mappings)
         _, y_test, y_mappings = get_vectors(df[mask_test], y_field, y_mappings, is_y=True)
@@ -484,7 +521,10 @@ def predict(df: pd.DataFrame
             coefs = []
             if hasattr(clf, 'coef_'):
                 if isinstance(clf.coef_[0], (tuple, list, np.ndarray)):
-                    coefs = fix_np_nan([v[0] for v in clf.coef_])
+                    if clf.coef_.shape[0] == 1:
+                        coefs = fix_np_nan(clf.coef_[0])
+                    else:
+                        coefs = fix_np_nan([v[0] for v in clf.coef_])
                 else:
                     coefs = fix_np_nan([v for v in clf.coef_])
                 if isinstance(coefs, (np.ndarray)) :
@@ -652,6 +692,10 @@ def predict(df: pd.DataFrame
 
         pass
 
+
+    print("--------------------------------\n"
+          "-- VALIDATION SET APPLICATION --\n"
+          "--------------------------------")
     # CREATE X_VALIDATE
     df_validate = df.loc[mask_validate, :]
 
@@ -938,8 +982,10 @@ def get_vectors(df: pd.DataFrame
 def matrix_vstack(m: tuple, return_sparse: bool=None):
     global use_sparse
     if sum([sparse.issparse(d) for d in list(m)]) == 1:
-        use_sparse = False
-        m = [d.toarray() if sparse.issparse(d) else d for d in list(m)]
+        if use_sparse:
+            m = [sparse.csc_matrix(d) if not sparse.issparse(d) else d for d in list(m)]
+        else:
+            m = [d.toarray() if sparse.issparse(d) else d for d in list(m)]
         m = tuple(m)
 
     if use_sparse:
@@ -956,8 +1002,10 @@ def matrix_vstack(m: tuple, return_sparse: bool=None):
 def matrix_hstack(m: tuple, return_sparse: bool=None):
     global use_sparse
     if sum([sparse.issparse(d) for d in list(m)]) == 1:
-        use_sparse = False
-        m = [d.toarray() if sparse.issparse(d) else (d.reshape(-1,1) if len(d.shape)==1 else d) for d in list(m)]
+        if use_sparse:
+            m = [sparse.csc_matrix(d) if not sparse.issparse(d) else d for d in list(m)]
+        else:
+            m = [d.toarray() if sparse.issparse(d) else (d.reshape(-1,1) if len(d.shape)==1 else d) for d in list(m)]
         m = tuple(m)
 
     if use_sparse:
@@ -969,6 +1017,14 @@ def matrix_hstack(m: tuple, return_sparse: bool=None):
         if return_sparse:
             m = sparse.csc_matrix(m)
     return m
+
+
+def get_unique_name(n: str, vals: list):
+    if n in vals:
+        n = n + '_id1'
+        while n in vals:
+            n = '{0}{1}'.format(n[:-1], int(n[-1])+1)
+    return n
 
 
 def reverse_enumerate(l):

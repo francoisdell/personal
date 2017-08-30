@@ -28,10 +28,10 @@ import requests
 import importlib
 
 rawdata_from_file = True
-finaldata_from_file = False
+finaldata_from_file = True
 returns_predict_years_forward = [9, 10]
 recession_predict_years_forward = [2, 3]
-selection_limit = 1.0e-2
+selection_limit = 2.5e-1
 train_pct = 0.8
 start_dt = '1952-01-01'
 end_dt = datetime.today().strftime('%Y-%m-%d')
@@ -46,16 +46,16 @@ do_predict_returns = False
 do_predict_recessions = True
 fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
 ewm_halflife = 4.2655  # 4.2655 corresponds to a 0.125 weight
-default_imputer = 'fancyimpute'  # knnimpute is generally much faster so easier to use in many cases
+default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster.
 
 recession_models = [
-                   ['abc','knn_c','bernoulli_nb','nearest_centroid','rfor','gbc','pass_agg_c','sgd_c','ridge_c','logit']  # 2yr: 0  ||  3yr: 0
-                  ,['abc','knn_c','bernoulli_nb','nearest_centroid','gbc','sgd_c','logit','rfor','ridge_c','pass_agg_c']  # 2yr: 1  ||  3yr:
-                  ,['knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','sgd_c','logit','abc','ridge_c','nearest_centroid']  # 2yr: 0  ||  3yr:
-                  ,['knn_c','gbc','pass_agg_c','sgd_c','rfor','logit','abc','nearest_centroid','ridge_c','bernoulli_nb']  # 2yr: 4  ||  3yr:
-                  ,['gbc','pass_agg_c','sgd_c','logit','abc','rfor','nearest_centroid','bernoulli_nb','ridge_c','knn_c']  # 2yr: 0  ||  3yr:
-                  ,['abc','logit','rfor','knn_c','bernoulli_nb','nearest_centroid','gbc','pass_agg_c','ridge_c','sgd_c']  # 2yr: 0  ||  3yr:
-                  ,['abc','logit','knn_c','bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','ridge_c','gbc']  # 2yr: 0  ||  3yr:
+                   ['svc','knn_c','bernoulli_nb','nearest_centroid','rfor','gbc','pass_agg_c','sgd_c','etree_c','logit']  # 2yr: 0  ||  3yr: 0
+                  ,['svc','knn_c','bernoulli_nb','nearest_centroid','gbc','sgd_c','logit','rfor','etree_c','pass_agg_c']  # 2yr: 0  ||  3yr:
+                  ,['knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','sgd_c','logit','svc','etree_c','nearest_centroid']  # 2yr: 0  ||  3yr:
+                  ,['knn_c','gbc','pass_agg_c','sgd_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr: 4  ||  3yr:
+                  ,['gbc','pass_agg_c','sgd_c','logit','svc','rfor','nearest_centroid','bernoulli_nb','etree_c','knn_c']  # 2yr: 0  ||  3yr:
+                  ,['svc','logit','rfor','knn_c','bernoulli_nb','nearest_centroid','gbc','pass_agg_c','etree_c','sgd_c']  # 2yr: 0  ||  3yr:
+                  ,['svc','logit','knn_c','bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','etree_c','gbc']  # 2yr: 0  ||  3yr:
                   ]
 
 ## INTERESTING @ 2 YEARS
@@ -927,7 +927,7 @@ except Exception as e:
 
         x_names = [
             'equity_alloc'
-            , 'tsy_10yr_yield'
+            # , 'tsy_10yr_yield'
             # , 'tsy_5yr_yield'
             # , 'tsy_3mo_yield'
             , 'cape'
@@ -955,24 +955,24 @@ except Exception as e:
     else:
         x_names = [
             'equity_alloc'
-            # , 'tsy_10yr_yield'
-            # , 'tsy_5yr_yield'
-            # , 'tsy_3mo_yield'
+            # , 'tsy_10yr_yield' # Treasury prices have been generally increasing over the time period. Don't use.
+            # , 'tsy_5yr_yield' # Treasury prices have been generally increasing over the time period. Don't use.
+            # , 'tsy_3mo_yield' # Treasury prices have been generally increasing over the time period. Don't use.
             , 'cape'
             # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
             , 'unempl_rate'
-            , 'empl_construction'
+            # , 'empl_construction'  # Construction employees heave been generally increasing over the time period. Don't use.
             , 'sp500_peratio'
             , 'capacity_util_mfg'
             , 'capacity_util_chem'
-            # , 'gold_fix_3pm'
-            , 'fed_funds_rate'
+            # , 'gold_fix_3pm' # Gold price has been generally increasing over the time period. Don't use.
+            # , 'fed_funds_rate' # Fed funds rate has been generally declining over the time period. Don't use.
             , 'tsy_3m10y_curve'
             , 'industrial_prod'
             , 'tsy_10yr_minus_fed_funds_rate'
-            , 'tsy_10yr_minus_cpi'
+            # , 'tsy_10yr_minus_cpi'
             # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
-            # , 'gdp_nom'
+            # , 'gdp_nom' # GDP is generally always rising. Don't use.
             # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
             # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
             # , 'tsy_30yr_yield' # Not much history
@@ -1014,10 +1014,10 @@ except Exception as e:
         , 'real_estate_loans'
         , 'foreign_dir_invest'
         , 'pers_savings_rt'
-        # , 'gross_savings'
+        , 'gross_savings'
         , 'tax_receipts_corp'
-        # , 'fed_funds_rate'
-        # , 'gold_fix_3pm'
+        , 'fed_funds_rate'
+        , 'gold_fix_3pm'
     ]
 
     # Interactions between a field and its previous values
