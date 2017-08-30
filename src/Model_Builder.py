@@ -5,6 +5,15 @@ import sys
 if os.path.abspath(os.pardir) not in sys.path:
     sys.path.append(os.path.abspath(os.pardir))
 
+# from PyInstaller import compat
+# mkldir = os.path.join(compat.base_prefix, "Library", "bin")
+# binaries = [(os.path.join(mkldir, mkl), '') for mkl in os.listdir(mkldir) if mkl.startswith('mkl_')]
+# if not mkldir in os.environ['PATH']:
+#         os.environ['PATH'] = mkldir + os.pathsep + os.environ['PATH']
+# for b in binaries:
+#     if not b[0] in os.environ['PATH']:
+#         os.environ['PATH'] = b[0] + os.pathsep + os.environ['PATH']
+
 from typing import Union
 from math import exp
 import math
@@ -47,10 +56,28 @@ pd.options.mode.chained_assignment = None
 global use_sparse, verbose, s, new_fields
 use_sparse = True
 
+
+class ModelSet:
+    def __init__(self, final_models: Union[str, list], initial_models: Union[str, list]=list()):
+        if isinstance(final_models, str):
+            final_models = [final_models]
+        if isinstance(initial_models, str):
+            initial_models = [initial_models]
+        self.final_models = final_models
+        self.initial_models = initial_models
+
+    def get_models(self):
+        model_list = [(v, 'stack') for v in self.initial_models]
+        model_list.extend([(v, 'final') for v in self.final_models])
+        return model_list
+
+    def __str__(self):
+        return 'modelset_{0}stacked'.format(len(self.initial_models))
+
 def predict(df: pd.DataFrame
             , x_fields: dict
             , y_field: Union[dict, OrderedDict]
-            , model_type: Union[str, list]
+            , model_type: Union[str, list, ModelSet]
             , report_name: str
             , show_model_tests: bool=False
             , retrain_model: bool=False
@@ -78,13 +105,12 @@ def predict(df: pd.DataFrame
     model_dir = s.get_model_dir()
     # os.makedirs(model_dir, exist_ok=True)
 
-    if not isinstance(model_type, list):
-        model_type = [model_type]
+    if isinstance(model_type, list):
+        model_type = ModelSet(model_type[-1], model_type[:-1])
+    elif isinstance(model_type, str):
+        model_type = ModelSet(model_type)
 
-    predictive_model_file = '{0}\predictive_model_{1}.p'\
-        .format(model_dir,
-                model_type[0] if len(model_type) == 1 else 'stacked'
-                )
+    predictive_model_file = '{0}\pred_model_{1}.p'.format(model_dir, model_type)
 
     mappings_file = '%s\%s' % (model_dir, 'data_mappings.p')
 
@@ -156,7 +182,7 @@ def predict(df: pd.DataFrame
         x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
         x_train = fix_np_nan(x_train)
 
-        for idx, mt in enumerate(model_type):
+        for idx, (mt, order) in enumerate(model_type.get_models()):
 
             # print(x_train.shape)
             if verbose:
@@ -406,7 +432,7 @@ def predict(df: pd.DataFrame
 
             # Loop until you reach the very last predictive model, iteratively adding the predictions from each model
             #  to the dataframe and including those predictions in each successive model training process
-            if idx < len(model_type) -1:
+            if order == 'stack':
                 max_slice_size = 100000
                 y_all = list()
                 # y_all_probs = list()
@@ -484,12 +510,294 @@ def predict(df: pd.DataFrame
                     # new_x_train = sparse.csc_matrix(np.hstack(new_x_train))
                     x_train = matrix_hstack((x_train, new_x_train), return_sparse=True)
 
-            if hasattr(clf, 'intercept_') and (isinstance(clf.intercept_, (list)) and len(clf.intercept_) == 1):
-                print('--- Model over-normalization testing ---\n'
-                      'Intercept/Expit/Exp = {0} / {1} / {2}'
-                      .format(format(clf.intercept_[0], '.4f')
-                              , format(expit(clf.intercept_[0]), '.4f')
-                              , format(exp(clf.intercept_[0])), '.4f'))
+                if hasattr(clf, 'intercept_') and (isinstance(clf.intercept_, (list)) and len(clf.intercept_) == 1):
+                    print('--- Model over-normalization testing ---\n'
+                          'Intercept/Expit/Exp = {0} / {1} / {2}'
+                          .format(format(clf.intercept_[0], '.4f')
+                                  , format(expit(clf.intercept_[0]), '.4f')
+                                  , format(exp(clf.intercept_[0])), '.4f'))
+
+            else:
+                print("--------------------------\n"
+                      "-- TEST SET APPLICATION --\n"
+                      "--------------------------")
+                if show_model_tests:
+                    x_columns, x_test, x_mappings = get_vectors(df[mask_test], x_fields, x_mappings)
+                    _, y_test, y_mappings = get_vectors(df[mask_test], y_field, y_mappings, is_y=True)
+                    x_test = fix_np_nan(x_test)
+
+                    print("Total Named Columns: ", len(x_columns))
+
+                    coef_list = [['name'] + [new_colname.strip() for new_colname, show, orig_colname in x_columns]]
+
+                    if hasattr(clf, 'feature_importances_'):
+                        feat_importances = ['coef'] + fix_np_nan(clf.feature_importances_).tolist()
+                        print('Feature Importances:\n%s' % clf.feature_importances_, sep='\n')
+                        coef_list.append(feat_importances)
+
+                    try:
+                        coefs = []
+                        if hasattr(clf, 'coef_'):
+                            if isinstance(clf.coef_[0], (tuple, list, np.ndarray)):
+                                if clf.coef_.shape[0] == 1:
+                                    coefs = fix_np_nan(clf.coef_[0])
+                                else:
+                                    coefs = fix_np_nan([v[0] for v in clf.coef_])
+                            else:
+                                coefs = fix_np_nan([v for v in clf.coef_])
+                            if isinstance(coefs, (np.ndarray)):
+                                coefs = coefs.tolist()
+                            elif sparse.issparse(coefs):
+                                coefs = coefs.tolist()[-1].data
+                            print("Total Coefficients/Features:  ", len(coefs))
+                            # elif hasattr(clf, 'coefs_'):
+                            # coefs = np.nan_to_num(np.transpose(clf.coefs_))
+                            # multiplied_coefs = coefs[0][0] * coefs[1] / float(len(coefs[0]))
+                            # print(multiplied_coefs.sum())
+                            # print(coefs[0][0])
+                            # print(coefs[1])
+                            # print(len(coefs[0][0]))
+                            # print(len(coefs[1]))
+                            # if isinstance(coefs.tolist()[0], (list, tuple)):
+                            #     coefs = [(l * [c.sum() if isinstance(c, np.ndarray) else c for c in coefs[1]]).sum() / float(len(l)) for l in coefs[0]]
+                            # print('Coefficients: ', coefs)
+                            # print('Coefficient Matrix Shape: ', coefs.shape)
+                        else:
+                            raise ValueError('No coef_ or coefs_ attrubute in this model. Skipping.')
+
+                        scores, p_vals = sk_feat_sel.f_regression(x_test, y_test, center=False)
+
+                        nonzero_coefs_mask = [v != 0 for v in coefs]
+                        significant_coefs_mask = [v <= selection_limit for v in p_vals]
+
+                        print_df = pd.DataFrame(list(zip([v[0] for v in x_columns]
+                                                         , coefs
+                                                         , scores.tolist()
+                                                         , p_vals.tolist()))
+                                                , columns=['Name', 'Coef', 'Score', 'P-Value'])
+
+                        print_df = print_df.loc[
+                                   [v1 and v2 for v1, v2 in zip(nonzero_coefs_mask, significant_coefs_mask)], :]
+                        print_df.sort_values('Coef', ascending=True, inplace=True)
+
+                        with pd.option_context('display.max_rows', None, 'display.max_columns', None):
+                            print(print_df.to_string())
+                            # if nonzero_coefs_mask.value_counts().loc[True] <= 40:
+                            # nonzero_coefs_mask = nonzero_coefs_mask.values
+
+                            # print('==== Final Variables ====\n', np.asarray([v1 for v1, v2 in np.asarray(x_columns)[nonzero_coefs_mask]], dtype=np.str).sort())
+                            #
+                            # print("==== Coefficients ====\n", np.asarray(np.asarray(coefs)[nonzero_coefs_mask]))
+                            #
+                            # print('==== Scores ====\n', scores[nonzero_coefs_mask])
+                            # print('==== P-Values ====\n', p_vals[nonzero_coefs_mask])
+
+                        if len(coefs) > 0:
+                            coefs = ['coefs'] + [v for v in coefs]
+                            coef_list.append(coefs)
+
+                            expit_coefs = ['coef_expit'] + [expit(float(v)) for v in coefs[1:]]
+                            coef_list.append(expit_coefs)
+
+                            exp_coefs = ['coef_exp'] + ['%f' % exp(float(v)) for v in coefs[1:]]
+                            coef_list.append(exp_coefs)
+
+                    except ValueError as e:
+                        print(e)
+                        pass
+
+                    # scores, pvalues = chi2(x_test, y_test)
+                    scores2, pvalues2 = sk_feat_sel.f_regression(x_test, y_test, center=False)
+                    scores2 = ['linreg_scores'] + scores2.tolist()
+                    pvalues2 = ['linreg_pvalues'] + pvalues2.tolist()
+                    coef_list.append(scores2)
+                    coef_list.append(pvalues2)
+
+                    scores3, pvalues3 = sk_feat_sel.f_classif(x_test, y_test)
+                    scores3 = ['classif_scores'] + scores3.tolist()
+                    pvalues3 = ['classif_pvalues'] + pvalues3.tolist()
+                    coef_list.append(scores3)
+                    coef_list.append(pvalues3)
+
+                    coef_list = list(map(list, zip(*coef_list)))
+                    # coef_list = coef_list.transpose()
+                    for i, r in enumerate(coef_list[1:]):
+                        coef_list[i + 1] = [r[0]] + [round(float(v), 4) for v in r[1:]]
+
+                    value_mask = [bool(v[1]) for v in x_columns]
+                    value_mask_95 = [bool(x_columns[i][1]) and (float(v) <= 0.05) for i, v in enumerate(pvalues2[1:])]
+
+                    # print('PREDICTOR VARIABLES')
+                    # print(coef_list)
+
+                    pp2 = prettytable.PrettyTable(coef_list[0])
+                    for i, r in enumerate(sorted(coef_list[1:], key=lambda x: x[-1], reverse=False)):
+                        if value_mask_95[i]:
+                            pp2.add_row(r)
+                    # print('PREDICTOR VARIABLES SIGNIFICANT AT 95%')
+                    # print(pp2.get_string())
+
+                    # TRY TO SAVE THE COEFFICIENT LIST TO A FILE
+                    try:
+                        all_coefs = pd.DataFrame(coef_list[1:], columns=coef_list[0])
+                        all_coefs.to_csv('%s/%s' % (final_file_dir, 'all_coefs.csv'), index=True,
+                                         index_label=['index1'], header=True, encoding='utf_8')
+                    except PermissionError as e:
+                        print(e)
+                        pass
+
+                    try:
+                        with open('%s/%s' % (final_file_dir, 'coef_info.txt'), mode='wt', encoding='utf_8') as f:
+                            f.writelines(pp2.get_string())
+                    except UnicodeDecodeError as e:
+                        print(e)
+                        pass
+
+                    if hasattr(clf, 'intercept_'):
+                        intercept = clf.intercept_
+                        if isinstance(clf.intercept_, (np.float64, float)):
+                            intercept = [intercept]
+
+                        print('INTERCEPT')
+                        print(*intercept, sep='\n')
+
+                        print('INTERCEPT (EXPIT)')
+                        print(*[expit(v) for v in intercept], sep='\n')
+
+                        print('INTERCEPT (EXP)')
+                        print(*[exp(v) for v in intercept], sep='\n')
+                    try:
+                        preds = clf.predict(x_test)
+                    except TypeError as e:
+                        if "dense data is required" in str(e):
+                            x_test = x_test.toarray()
+                            use_sparse = False
+                            preds = clf.predict(x_test)
+                    print('R2 SCORE\n', r2_score(y_test, preds))
+
+                    if hasattr(clf, 'classes_'):
+                        print('CLASSES')
+                        print(clf.classes_)
+                        print('ACCURACY:\n', metrics.accuracy_score(y_test, preds))
+                        try:
+                            y_test_probs = clf.predict_proba(x_test)
+                            if y_test_probs.shape[1] <= 2:
+                                print('ROC-CURVE AOC', metrics.roc_auc_score(y_test, y_test_probs[:, 1]))
+
+                            print("PREDICTION PROBABILITIES")
+                            print(y_test_probs)
+                        except (ValueError, AttributeError) as e:
+                            print(e)
+                            pass
+
+                        # if not isinstance(preds, list):
+                        #     preds = [preds]
+                        # lol = list(enumerate(preds))
+                        # maps = list(y_mappings.values())
+
+                        # preds = [list(y_mappings.values())[index][values] for index, values in enumerate(preds)]
+
+                        for k, v in y_field.items():
+                            preds_str = resilient_inverse_transform(y_mappings[k], preds)
+                            preds_names = list(set(preds_str))
+
+                            print("Unique integers in y_test:", list(set(y_test)))
+                            y_test_str = resilient_inverse_transform(y_mappings[k], y_test)
+                            y_test_names = list(set(y_test_str))
+                            # Create confusion matrix
+                            conf_matrix = pd.crosstab(y_test_str, preds_str, rownames=['actual'],
+                                                      colnames=['predicted'])
+                            print("CONFIDENCE MATRIX")
+                            print(conf_matrix)
+
+                    pass
+
+                print("--------------------------------\n"
+                      "-- VALIDATION SET APPLICATION --\n"
+                      "--------------------------------")
+                # CREATE X_VALIDATE
+                df_validate = df.loc[mask_validate, :]
+
+                # ITERATE OVER THE df_validate in groups of 100K rows (to avoid memory errors) and predict outcomes
+                max_slice_size = 100000
+                y_validate = list()
+                y_validate_probs = list()
+                for s in range(0, int(math.ceil(len(df_validate.index) / max_slice_size))):
+                    min_idx = s * max_slice_size
+                    max_idx = min(len(df_validate.index), (s + 1) * max_slice_size)
+                    print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
+
+                    df_valid_iter = df[mask_validate].iloc[min_idx:max_idx]
+                    x_valid_columns, x_validate, x_mappings = get_vectors(df_valid_iter, x_fields, x_mappings)
+
+                    x_validate = fix_np_nan(x_validate)
+
+                    # print(x_validate)
+                    try:
+                        preds = clf.predict(x_validate)
+                    except TypeError as e:
+                        if "dense data is required" in str(e):
+                            x_validate = x_validate.toarray()
+                            use_sparse = False
+                            preds = clf.predict(x_validate)
+                            pass
+                    except DeprecationWarning as e:
+                        print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
+                        print(e)
+                        x_validate = x_validate.reshape(-1, 1)
+                        preds = clf.predict(x_validate)
+                        pass
+
+                    calculate_probs = hasattr(clf, 'classes_') \
+                                      and hasattr(clf, 'predict_proba') \
+                                      and not (hasattr(clf, 'loss') and clf.loss == 'hinge')
+                    if calculate_probs:
+                        pred_probs = clf.predict_proba(x_validate)
+                        y_validate_probs.append(pred_probs)
+
+                    y_validate.append(preds)
+
+                # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
+                y_validate = np.hstack(y_validate).reshape(-1, 1)
+
+                global new_fields
+                new_fields = list()
+                if calculate_probs:
+                    y_validate_probs = np.vstack(y_validate_probs)
+                    print('ORIGINAL PROBABILITIES')
+                    print(*y_validate_probs[:10].round(4), sep='\n')
+                    print('ORIGINAL PROBABILITIES (NORMALIZED)')
+                    print(*[np.around(np.expm1(x), 4) for x in y_validate_probs][:10], sep='\n')
+
+                    for y_name, m in y_mappings.items():
+                        df_probs = pd.DataFrame(data=y_validate_probs.round(4)
+                                                , columns=[y_name + '_prob_' + f.lower().replace(' ', '_') for f in
+                                                           list(m.classes_)[:y_validate_probs.shape[1]]]
+                                                , index=df_validate.index)
+                        # df_validate.reset_index(inplace=True, drop=True)
+
+                        for name in df_probs.columns.values:
+                            if name in df_validate.columns.values:
+                                df_probs.rename(columns={name: name + '_final'}, inplace=True)
+                        df_validate = df_validate.join(df_probs, how='inner')
+                        # for col in df_probs.columns.values:
+                        #     df_validate[col] = df_probs[col]
+                    new_fields.extend(df_probs.columns.values.tolist())
+
+                for k, v in y_field.items():
+                    final_preds = y_mappings[k].inverse_transform(y_validate)
+                    print('FINAL PREDICTIONS')
+                    print(*final_preds[:10])
+                    y_pred_name = 'pred_' + k
+                    df_validate.loc[:, y_pred_name] = final_preds
+                    new_fields.extend([y_pred_name])
+
+                if predict_all:
+                    return_df = df_validate
+                else:
+                    return_df = df.loc[mask_validate == 0, :].append(df_validate, ignore_index=True)
+
+                yield return_df, mt
 
         try:
             with open(predictive_model_file, 'wb') as pickle_file:
@@ -500,281 +808,7 @@ def predict(df: pd.DataFrame
         with open(mappings_file, 'wb') as pickle_file:
             pickle.dump((x_mappings, y_mappings), pickle_file)
 
-    print("--------------------------\n"
-          "-- TEST SET APPLICATION --\n"
-          "--------------------------")
-    if show_model_tests:
-        x_columns, x_test, x_mappings = get_vectors(df[mask_test], x_fields, x_mappings)
-        _, y_test, y_mappings = get_vectors(df[mask_test], y_field, y_mappings, is_y=True)
-        x_test = fix_np_nan(x_test)
 
-        print("Total Named Columns: ", len(x_columns))
-
-        coef_list = [['name'] + [new_colname.strip() for new_colname, show, orig_colname in x_columns]]
-
-        if hasattr(clf, 'feature_importances_'):
-            feat_importances = ['coef'] + fix_np_nan(clf.feature_importances_).tolist()
-            print('Feature Importances:\n%s' % clf.feature_importances_, sep='\n')
-            coef_list.append(feat_importances)
-
-        try:
-            coefs = []
-            if hasattr(clf, 'coef_'):
-                if isinstance(clf.coef_[0], (tuple, list, np.ndarray)):
-                    if clf.coef_.shape[0] == 1:
-                        coefs = fix_np_nan(clf.coef_[0])
-                    else:
-                        coefs = fix_np_nan([v[0] for v in clf.coef_])
-                else:
-                    coefs = fix_np_nan([v for v in clf.coef_])
-                if isinstance(coefs, (np.ndarray)) :
-                    coefs = coefs.tolist()
-                elif sparse.issparse(coefs):
-                    coefs = coefs.tolist()[-1].data
-                print("Total Coefficients/Features:  ", len(coefs))
-            # elif hasattr(clf, 'coefs_'):
-                # coefs = np.nan_to_num(np.transpose(clf.coefs_))
-                # multiplied_coefs = coefs[0][0] * coefs[1] / float(len(coefs[0]))
-                # print(multiplied_coefs.sum())
-                # print(coefs[0][0])
-                # print(coefs[1])
-                # print(len(coefs[0][0]))
-                # print(len(coefs[1]))
-                # if isinstance(coefs.tolist()[0], (list, tuple)):
-                #     coefs = [(l * [c.sum() if isinstance(c, np.ndarray) else c for c in coefs[1]]).sum() / float(len(l)) for l in coefs[0]]
-                # print('Coefficients: ', coefs)
-                # print('Coefficient Matrix Shape: ', coefs.shape)
-            else:
-                raise ValueError('No coef_ or coefs_ attrubute in this model. Skipping.')
-
-            scores, p_vals = sk_feat_sel.f_regression(x_test, y_test, center=False)
-
-            nonzero_coefs_mask = [v != 0 for v in coefs]
-            significant_coefs_mask = [v <= selection_limit for v in p_vals]
-
-            print_df = pd.DataFrame(list(zip([v[0] for v in x_columns]
-                                            , coefs
-                                            , scores.tolist()
-                                            , p_vals.tolist()))
-                                    , columns=['Name', 'Coef', 'Score', 'P-Value'])
-
-            print_df = print_df.loc[[v1 and v2 for v1, v2 in zip(nonzero_coefs_mask, significant_coefs_mask)], :]
-            print_df.sort_values('Coef', ascending=True, inplace=True)
-
-            with pd.option_context('display.max_rows', None, 'display.max_columns', None):
-                print(print_df.to_string())
-            # if nonzero_coefs_mask.value_counts().loc[True] <= 40:
-                # nonzero_coefs_mask = nonzero_coefs_mask.values
-
-                # print('==== Final Variables ====\n', np.asarray([v1 for v1, v2 in np.asarray(x_columns)[nonzero_coefs_mask]], dtype=np.str).sort())
-                #
-                # print("==== Coefficients ====\n", np.asarray(np.asarray(coefs)[nonzero_coefs_mask]))
-                #
-                # print('==== Scores ====\n', scores[nonzero_coefs_mask])
-                # print('==== P-Values ====\n', p_vals[nonzero_coefs_mask])
-
-            if len(coefs) > 0:
-                coefs = ['coefs'] + [v for v in coefs]
-                coef_list.append(coefs)
-
-                expit_coefs = ['coef_expit'] + [expit(float(v)) for v in coefs[1:]]
-                coef_list.append(expit_coefs)
-
-                exp_coefs = ['coef_exp'] + ['%f' % exp(float(v)) for v in coefs[1:]]
-                coef_list.append(exp_coefs)
-
-        except ValueError as e:
-            print(e)
-            pass
-
-        # scores, pvalues = chi2(x_test, y_test)
-        scores2, pvalues2 = sk_feat_sel.f_regression(x_test, y_test, center=False)
-        scores2 = ['linreg_scores'] + scores2.tolist()
-        pvalues2 = ['linreg_pvalues'] + pvalues2.tolist()
-        coef_list.append(scores2)
-        coef_list.append(pvalues2)
-
-        scores3, pvalues3 = sk_feat_sel.f_classif(x_test, y_test)
-        scores3 = ['classif_scores'] + scores3.tolist()
-        pvalues3 = ['classif_pvalues'] + pvalues3.tolist()
-        coef_list.append(scores3)
-        coef_list.append(pvalues3)
-
-        coef_list = list(map(list, zip(*coef_list)))
-        # coef_list = coef_list.transpose()
-        for i, r in enumerate(coef_list[1:]):
-            coef_list[i+1] = [r[0]] + [round(float(v),4) for v in r[1:]]
-
-        value_mask = [bool(v[1]) for v in x_columns]
-        value_mask_95 = [bool(x_columns[i][1]) and (float(v) <= 0.05) for i, v in enumerate(pvalues2[1:])]
-
-        # print('PREDICTOR VARIABLES')
-        # print(coef_list)
-
-        pp2 = prettytable.PrettyTable(coef_list[0])
-        for i, r in enumerate(sorted(coef_list[1:], key=lambda x: x[-1], reverse=False)):
-            if value_mask_95[i]:
-                pp2.add_row(r)
-        # print('PREDICTOR VARIABLES SIGNIFICANT AT 95%')
-        # print(pp2.get_string())
-
-        # TRY TO SAVE THE COEFFICIENT LIST TO A FILE
-        try:
-            all_coefs = pd.DataFrame(coef_list[1:], columns=coef_list[0])
-            all_coefs.to_csv('%s/%s' % (final_file_dir, 'all_coefs.csv'), index=True, index_label=['index1'], header=True, encoding='utf_8')
-        except PermissionError as e:
-            print(e)
-            pass
-
-        try:
-            with open('%s/%s' % (final_file_dir, 'coef_info.txt'), mode='wt', encoding='utf_8') as f:
-                f.writelines(pp2.get_string())
-        except UnicodeDecodeError as e:
-            print(e)
-            pass
-
-        if hasattr(clf, 'intercept_'):
-            intercept = clf.intercept_
-            if isinstance(clf.intercept_, (np.float64, float)):
-                intercept = [intercept]
-
-            print('INTERCEPT')
-            print(*intercept, sep='\n')
-
-            print('INTERCEPT (EXPIT)')
-            print(*[expit(v) for v in intercept], sep='\n')
-
-            print('INTERCEPT (EXP)')
-            print(*[exp(v) for v in intercept], sep='\n')
-        try:
-            preds = clf.predict(x_test)
-        except TypeError as e:
-            if "dense data is required" in str(e):
-                x_test = x_test.toarray()
-                use_sparse = False
-                preds = clf.predict(x_test)
-        print('R2 SCORE\n', r2_score(y_test, preds))
-
-        if hasattr(clf, 'classes_'):
-            print('CLASSES')
-            print(clf.classes_)
-            print('ACCURACY:\n', metrics.accuracy_score(y_test, preds))
-            try:
-                y_test_probs = clf.predict_proba(x_test)
-                if y_test_probs.shape[1] <= 2:
-                    print('ROC-CURVE AOC', metrics.roc_auc_score(y_test, y_test_probs[:, 1]))
-
-                print("PREDICTION PROBABILITIES")
-                print(y_test_probs)
-            except (ValueError, AttributeError) as e:
-                print(e)
-                pass
-
-            # if not isinstance(preds, list):
-            #     preds = [preds]
-            # lol = list(enumerate(preds))
-            # maps = list(y_mappings.values())
-
-            # preds = [list(y_mappings.values())[index][values] for index, values in enumerate(preds)]
-
-            for k, v in y_field.items():
-                preds_str = resilient_inverse_transform(y_mappings[k], preds)
-                preds_names = list(set(preds_str))
-
-                print("Unique integers in y_test:", list(set(y_test)))
-                y_test_str = resilient_inverse_transform(y_mappings[k], y_test)
-                y_test_names = list(set(y_test_str))
-                # Create confusion matrix
-                conf_matrix = pd.crosstab(y_test_str, preds_str, rownames=['actual'],
-                                          colnames=['predicted'])
-                print("CONFIDENCE MATRIX")
-                print(conf_matrix)
-
-        pass
-
-
-    print("--------------------------------\n"
-          "-- VALIDATION SET APPLICATION --\n"
-          "--------------------------------")
-    # CREATE X_VALIDATE
-    df_validate = df.loc[mask_validate, :]
-
-    # ITERATE OVER THE df_validate in groups of 100K rows (to avoid memory errors) and predict outcomes
-    max_slice_size = 100000
-    y_validate = list()
-    y_validate_probs = list()
-    for s in range(0, int(math.ceil(len(df_validate.index)/max_slice_size))):
-        min_idx = s*max_slice_size
-        max_idx = min(len(df_validate.index), (s+1)*max_slice_size)
-        print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
-
-        df_valid_iter = df[mask_validate].iloc[min_idx:max_idx]
-        x_valid_columns, x_validate, x_mappings = get_vectors(df_valid_iter, x_fields, x_mappings)
-
-        x_validate = fix_np_nan(x_validate)
-
-        # print(x_validate)
-        try:
-            preds = clf.predict(x_validate)
-        except TypeError as e:
-            if "dense data is required" in str(e):
-                x_validate = x_validate.toarray()
-                use_sparse = False
-                preds = clf.predict(x_validate)
-                pass
-        except DeprecationWarning as e:
-            print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
-            print(e)
-            x_validate = x_validate.reshape(-1, 1)
-            preds = clf.predict(x_validate)
-            pass
-
-        calculate_probs = hasattr(clf, 'classes_') \
-                          and hasattr(clf, 'predict_proba') \
-                          and not (hasattr(clf, 'loss') and clf.loss == 'hinge')
-        if calculate_probs:
-            pred_probs = clf.predict_proba(x_validate)
-            y_validate_probs.append(pred_probs)
-
-        y_validate.append(preds)
-
-    # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
-    y_validate = np.hstack(y_validate).reshape(-1,1)
-
-    global new_fields
-    new_fields = list()
-    if calculate_probs:
-        y_validate_probs = np.vstack(y_validate_probs)
-        print('ORIGINAL PROBABILITIES')
-        print(*y_validate_probs[:10].round(4), sep='\n')
-        print('ORIGINAL PROBABILITIES (NORMALIZED)')
-        print(*[np.around(np.expm1(x), 4) for x in y_validate_probs][:10], sep='\n')
-
-        for y_name, m in y_mappings.items():
-            df_probs = pd.DataFrame(data=y_validate_probs.round(4)
-                            , columns=[y_name + '_prob_' + f.lower().replace(' ','_') for f in list(m.classes_)[:y_validate_probs.shape[1]]]
-                            , index=df_validate.index)
-            # df_validate.reset_index(inplace=True, drop=True)
-            df_validate = df_validate.join(df_probs, how='inner')
-            # for col in df_probs.columns.values:
-            #     df_validate[col] = df_probs[col]
-        new_fields.extend(df_probs.columns.values.tolist())
-
-    for k, v in y_field.items():
-        final_preds = y_mappings[k].inverse_transform(y_validate)
-        print('FINAL PREDICTIONS')
-        print(*final_preds[:10])
-        y_pred_name = 'pred_' + k
-        df_validate.loc[:, y_pred_name] = final_preds
-        new_fields.extend([y_pred_name])
-
-    if predict_all:
-        df = df_validate
-    else:
-        df = df.loc[mask_validate == 0, :].append(df_validate, ignore_index=True)
-        df = df.loc[mask_validate == 0, :].append(df_validate, ignore_index=True)
-
-    return df
 
 def get_pred_field_names():
     global new_fields

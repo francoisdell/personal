@@ -33,7 +33,7 @@ returns_predict_years_forward = [9, 10]
 recession_predict_years_forward = [2, 3]
 selection_limit = 2.5e-1
 train_pct = 0.8
-start_dt = '1952-01-01'
+start_dt = '1920-01-01'
 end_dt = datetime.today().strftime('%Y-%m-%d')
 interaction_type = None  # Options: all, level_1, None
 correlation_type = 'level_1'  # Options: level_1, None
@@ -48,14 +48,21 @@ fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
 ewm_halflife = 4.2655  # 4.2655 corresponds to a 0.125 weight
 default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster.
 
+
+
 recession_models = [
-                   ['svc','knn_c','bernoulli_nb','nearest_centroid','rfor','gbc','pass_agg_c','etree_c','logit']  # 2yr: 0  ||  3yr: 0
-                  ,['svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr: 0  ||  3yr:
-                  ,['knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr: 0  ||  3yr:
-                  ,['knn_c','gbc','pass_agg_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr: 4  ||  3yr:
-                  ,['gbc','pass_agg_c','logit','svc','rfor','nearest_centroid','bernoulli_nb','etree_c','knn_c']  # 2yr: 0  ||  3yr:
-                  ,['svc','logit','rfor','knn_c','bernoulli_nb','nearest_centroid','gbc','pass_agg_c','etree_c']  # 2yr: 0  ||  3yr:
-                  ,['svc','logit','knn_c','bernoulli_nb','nearest_centroid','pass_agg_c','rfor','etree_c','gbc']  # 2yr: 0  ||  3yr:
+                   # mb.ModelSet(final_models = ['logit', 'pass_agg_c','nearest_centroid','bernoulli_nb','knn_c',
+                   #                              'etree_c','gbc'],
+                   #              initial_models=['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','rfor',
+                   #                              'gbc','pass_agg_c','etree_c'])
+                    mb.ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','bernoulli_nb','gbc','svc','sgd_c'],
+                                initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','gbc','svc','sgd_c','knn_c','bernoulli_nb'])
+                  # ,['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr:   ||  3yr:
+                  # ,['sgd_c','knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr:   ||  3yr:
+                  # ,['sgd_c','knn_c','gbc','pass_agg_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr:   ||  3yr:
+                  # ,['sgd_c','gbc','pass_agg_c','logit','svc','rfor','nearest_centroid','bernoulli_nb','etree_c','knn_c']  # 2yr:   ||  3yr:
+                  # ,['sgd_c','svc','logit','rfor','knn_c','bernoulli_nb','nearest_centroid','gbc','pass_agg_c','etree_c']  # 2yr:   ||  3yr:
+                  # ,['sgd_c','svc','logit','knn_c','bernoulli_nb','nearest_centroid','pass_agg_c','rfor','etree_c','gbc']  # 2yr:   ||  3yr:
                   ]
 
 ## INTERESTING @ 2 YEARS
@@ -388,8 +395,7 @@ def predict_recession(df: pd.DataFrame
                       , x_names: list
                       , y_field_name: str
                       , years_forward: int
-                      , prune: bool=False
-                      , model_name: Union[str, list]='gbc') \
+                      , model_set: mb.ModelSet)\
         -> (OrderedDict, str):
 
     print("\n-----------------------"
@@ -416,14 +422,12 @@ def predict_recession(df: pd.DataFrame
     y_field = OrderedDict([(forward_y_field_name, 'cat')])
     x_fields = OrderedDict([(v, 'num') for v in x_names])
 
-    if not isinstance(model_name, list):
-        model_name = [model_name]
-    report_name = 'recession_{0}yr_{1}'.format(years_forward, model_name[0] if len(model_name) == 1 else 'stacked')
+    report_name = 'recession_{0}yr_{1}'.format(years_forward, model_set)
 
-    df = mb.predict(df
+    for df, final_model_name in mb.predict(df
                     , x_fields=x_fields
                     , y_field=y_field
-                    , model_type=model_name
+                    , model_type=model_set
                     , report_name=report_name
                     , show_model_tests=True
                     , retrain_model=True
@@ -431,38 +435,39 @@ def predict_recession(df: pd.DataFrame
                     , predict_all=True
                     , verbose=verbose
                     , train_pct=train_pct
-                    , random_train_test=False)
+                    , random_train_test=False):
 
-    forward_y_field_name_pred = 'pred_' + forward_y_field_name
-    #################################
+        forward_y_field_name_pred = 'pred_' + forward_y_field_name
+        #################################
 
-    print(max(df.index))
-    from dateutil.relativedelta import relativedelta
-    df = df.reindex(
-        pd.DatetimeIndex(start=df.index.min(), end=max(df.index) + relativedelta(years=years_forward), freq='1Q'))
+        print(max(df.index))
+        from dateutil.relativedelta import relativedelta
+        df = df.reindex(
+            pd.DatetimeIndex(start=df.index.min(), end=max(df.index) + relativedelta(years=years_forward), freq='1Q'))
 
-    y_field_name_pred = '{0}_pred'.format(y_field_name)
-    df[y_field_name_pred] = df[forward_y_field_name_pred].shift(years_forward * 4)
-    chart_y_field_names = [y_field_name, y_field_name_pred]
+        y_field_name_pred = '{0}_pred'.format(y_field_name)
+        df[y_field_name_pred] = df[forward_y_field_name_pred].shift(years_forward * 4)
+        chart_y_field_names = [y_field_name, y_field_name_pred]
 
-    y_pred_names = mb.get_pred_field_names()
-    y_prob_field_name = '{0}_prob_1.0'.format(forward_y_field_name)
-    if y_prob_field_name in y_pred_names:
-        df[y_prob_field_name] = df[y_prob_field_name].shift(years_forward * 4)
-        chart_y_field_names += [y_prob_field_name]
+        y_pred_names = mb.get_pred_field_names()
+        y_prob_field_name = '{0}_prob_1.0'.format(forward_y_field_name)
+        if y_prob_field_name in y_pred_names:
+            df[y_prob_field_name] = df[y_prob_field_name].shift(years_forward * 4)
+            chart_y_field_names += [y_prob_field_name]
 
-    # if years_forward in [10]:
-    chart(df
-          , ys=[['sp500'], chart_y_field_names]
-          , invert=[False, False]
-          , log_scale=[True, False]
-          , save_name='_'.join([forward_y_field_name_pred, report_name])
-          , title='_'.join([y_field_name, report_name]))
+        report_name = 'recession_{0}yr_{1}_{2}'.format(years_forward, model_set, final_model_name)
+        # if years_forward in [10]:
+        chart(df
+              , ys=[['sp500'], chart_y_field_names]
+              , invert=[False, False]
+              , log_scale=[True, False]
+              , save_name='_'.join([forward_y_field_name_pred, report_name])
+              , title='_'.join([y_field_name, report_name]))
 
-    return (OrderedDict(((forward_y_field_name, df[forward_y_field_name])
-        , (forward_y_field_name_pred, df[forward_y_field_name_pred])
-        , (y_field_name_pred, df[y_field_name_pred])))
-        , report_name)
+        yield (OrderedDict(((forward_y_field_name, df[forward_y_field_name])
+            , (forward_y_field_name_pred, df[forward_y_field_name_pred])
+            , (y_field_name_pred, df[y_field_name_pred])))
+            , report_name)
 
 def decimal_to_date(d: str):
     year = int(float(d))
@@ -1125,18 +1130,17 @@ if do_predict_returns:
 # RECESSION PREDICTIONS
 if do_predict_recessions:
     for yf in recession_predict_years_forward:
-        for idx, model_list in enumerate(recession_models):
-            d, report_name = predict_recession(df=df
+        for idx, model_set in enumerate(recession_models):
+            for d, report_name in predict_recession(df=df
                                   , x_names=x_names
                                   , y_field_name=recession_field_name
                                   , years_forward=yf
-                                  , prune=True
-                                  , model_name=model_list)
-            for k,v in d.items():
-                df[k] = v
+                                  , model_set=model_set):
+                for k,v in d.items():
+                    df[k] = v
 
-            new_dataset = [v for v in d.values()][-1]
-            new_field_name = '{0}_m{1}'.format(report_name, idx)
+                new_dataset = [v for v in d.values()][-1]
+                new_field_name = '{0}_m{1}'.format(report_name, idx)
 
 
 
