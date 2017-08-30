@@ -49,13 +49,13 @@ ewm_halflife = 4.2655  # 4.2655 corresponds to a 0.125 weight
 default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster.
 
 recession_models = [
-                   ['svc','knn_c','bernoulli_nb','nearest_centroid','rfor','gbc','pass_agg_c','sgd_c','etree_c','logit']  # 2yr: 0  ||  3yr: 0
-                  ,['svc','knn_c','bernoulli_nb','nearest_centroid','gbc','sgd_c','logit','rfor','etree_c','pass_agg_c']  # 2yr: 0  ||  3yr:
-                  ,['knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','sgd_c','logit','svc','etree_c','nearest_centroid']  # 2yr: 0  ||  3yr:
-                  ,['knn_c','gbc','pass_agg_c','sgd_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr: 4  ||  3yr:
-                  ,['gbc','pass_agg_c','sgd_c','logit','svc','rfor','nearest_centroid','bernoulli_nb','etree_c','knn_c']  # 2yr: 0  ||  3yr:
-                  ,['svc','logit','rfor','knn_c','bernoulli_nb','nearest_centroid','gbc','pass_agg_c','etree_c','sgd_c']  # 2yr: 0  ||  3yr:
-                  ,['svc','logit','knn_c','bernoulli_nb','nearest_centroid','pass_agg_c','rfor','sgd_c','etree_c','gbc']  # 2yr: 0  ||  3yr:
+                   ['svc','knn_c','bernoulli_nb','nearest_centroid','rfor','gbc','pass_agg_c','etree_c','logit']  # 2yr: 0  ||  3yr: 0
+                  ,['svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr: 0  ||  3yr:
+                  ,['knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr: 0  ||  3yr:
+                  ,['knn_c','gbc','pass_agg_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr: 4  ||  3yr:
+                  ,['gbc','pass_agg_c','logit','svc','rfor','nearest_centroid','bernoulli_nb','etree_c','knn_c']  # 2yr: 0  ||  3yr:
+                  ,['svc','logit','rfor','knn_c','bernoulli_nb','nearest_centroid','gbc','pass_agg_c','etree_c']  # 2yr: 0  ||  3yr:
+                  ,['svc','logit','knn_c','bernoulli_nb','nearest_centroid','pass_agg_c','rfor','etree_c','gbc']  # 2yr: 0  ||  3yr:
                   ]
 
 ## INTERESTING @ 2 YEARS
@@ -824,6 +824,8 @@ data_sources['pers_savings_rt'] = data_source('PSAVERT', 'fred')
 data_sources['gross_savings'] = data_source('GSAVE', 'fred')
 data_sources['tax_receipts_corp'] = data_source('FCTAX', 'fred')
 data_sources['tax_receipts_tot'] = data_source('W006RC1Q027SBEA', 'fred')
+data_sources['nonfin_equity'] = data_source('MVEONWMVBSNNCB', 'fred')
+data_sources['nonfin_networth'] = data_source('TNWMVBSNNCB', 'fred')
 data_sources['recession_usa'] = data_source('USREC', 'fred')
 ds_names = [k for k in data_sources.keys()]
 
@@ -894,7 +896,7 @@ except Exception as e:
     df['tsy_10yr_minus_cpi'] = df['tsy_10yr_yield'] - df['cpi_urb_nonvol']
     df['tsy_10yr_minus_fed_funds_rate'] = df['tsy_10yr_yield'] - df['fed_funds_rate']
     df['tsy_3m10y_curve'] = df['tsy_3mo_yield'] / df['tsy_10yr_yield']
-
+    df['tobin_q'] = [math.sqrt(x * y) for x, y in df.loc[:,['nonfin_equity','nonfin_networth']].values]  # geom mean
 
     if do_predict_returns:
         # FULL LIST FOR LINEAR REGRESSION
@@ -931,6 +933,7 @@ except Exception as e:
             # , 'tsy_5yr_yield'
             # , 'tsy_3mo_yield'
             , 'cape'
+            , 'tobin_q'
             # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
             , 'unempl_rate'
             # , 'empl_construction'
@@ -959,6 +962,7 @@ except Exception as e:
             # , 'tsy_5yr_yield' # Treasury prices have been generally increasing over the time period. Don't use.
             # , 'tsy_3mo_yield' # Treasury prices have been generally increasing over the time period. Don't use.
             , 'cape'
+            , 'tobin_q'
             # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
             , 'unempl_rate'
             # , 'empl_construction'  # Construction employees heave been generally increasing over the time period. Don't use.
@@ -999,6 +1003,7 @@ except Exception as e:
     diff_x_names = [
         'gdp_nom'
         , 'cape'
+        , 'tobin_q'
         , 'cpi_urb_nonvol'
         , 'empl_construction'
         , 'industrial_prod'
