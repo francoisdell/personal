@@ -58,13 +58,20 @@ use_sparse = True
 
 
 class ModelSet:
-    def __init__(self, final_models: Union[str, list], initial_models: Union[str, list]=list()):
+    def __init__(self,
+                 final_models: Union[str, list],
+                 initial_models: Union[str, list]=list(),
+                 load_init_models: bool=True,
+                 load_final_models: bool=True):
+
         if isinstance(final_models, str):
             final_models = [final_models]
         if isinstance(initial_models, str):
             initial_models = [initial_models]
         self.final_models = final_models
         self.initial_models = initial_models
+        self.load_init_models = load_init_models
+        self.load_final_models = load_final_models
 
     def get_models(self):
         model_list = [(v, 'stack') for v in self.initial_models]
@@ -183,7 +190,7 @@ def predict(df: pd.DataFrame
         x_train = fix_np_nan(x_train)
 
         if selection_limit < 1.0:
-            print('Pruning x_fields for any variables with a p-value > (0}'.format(selection_limit))
+            print('Pruning x_fields for any variables with a p-value > {0}'.format(selection_limit))
             scores, p_vals = sk_feat_sel.f_regression(x_train, y_train, center=False)
             for x_field_name in list(x_fields.keys()):
                 xcol_indices = [idx for idx, vals in enumerate(x_columns) if vals[2] == x_field_name]

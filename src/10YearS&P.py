@@ -56,7 +56,9 @@ recession_models = [
                    #              initial_models=['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','rfor',
                    #                              'gbc','pass_agg_c','etree_c'])
                     mb.ModelSet(final_models=['ridge_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c'],
-                                initial_models=['pass_agg_c','gbc','svc','ridge_c','knn_c','bernoulli_nb','logit','nearest_centroid','etree_c'])
+                                initial_models=['pass_agg_c','gbc','svc','ridge_c','knn_c','bernoulli_nb','logit','nearest_centroid','etree_c'],
+                                load_init_models=True,
+                                load_final_models=True)
                   # ,['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','gbc','pass_agg_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr:   ||  3yr:
