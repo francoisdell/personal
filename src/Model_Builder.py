@@ -528,7 +528,7 @@ def predict(df: pd.DataFrame
 
                 preds, x_all = resilient_predict(clf, x_all)
                 if calculate_probs:
-                    pred_probs = resilient_predict_probs(clf, x_all)
+                    pred_probs, x_all = resilient_predict_probs(clf, x_all)
                 y_all.append(preds)
 
             # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
@@ -860,7 +860,7 @@ def predict(df: pd.DataFrame
             pickle.dump((x_mappings, y_mappings), pickle_file)
 
 
-def resilient_fit(obj, x, y):
+def resilient_fit(obj, x, y) -> (object, object):
     global use_sparse
     try:
         obj.fit(x, y)
@@ -880,7 +880,7 @@ def resilient_fit(obj, x, y):
     return obj, x
 
 
-def resilient_predict(obj, x):
+def resilient_predict(obj, x) -> (object, object):
     global use_sparse
     try:
         preds = obj.predict(x)
@@ -900,7 +900,7 @@ def resilient_predict(obj, x):
     return preds, x
 
 
-def resilient_predict_probs(obj, x):
+def resilient_predict_probs(obj, x) -> (object, object):
     global use_sparse
     try:
         preds = obj.predict_proba(x)
