@@ -182,6 +182,16 @@ def predict(df: pd.DataFrame
         x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
         x_train = fix_np_nan(x_train)
 
+        if selection_limit < 1.0:
+            print('Pruning x_fields for any variables with a p-value > (0}'.format(selection_limit))
+            scores, p_vals = sk_feat_sel.f_regression(x_train, y_train, center=False)
+            for x_field_name in list(x_fields.keys()):
+                xcol_indices = [idx for idx, vals in enumerate(x_columns) if vals[2] == x_field_name]
+                if all(p_vals[idx] > selection_limit or p_vals[idx] == np.nan for idx in xcol_indices):
+                    x_fields.pop(x_field_name)
+            x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
+            x_train = fix_np_nan(x_train)
+
         for idx, (mt, order) in enumerate(model_type.get_models()):
 
             # print(x_train.shape)
@@ -313,8 +323,11 @@ def predict(df: pd.DataFrame
                 if 'alpha' in clf.get_params().keys():
                     if isinstance(clf, (GradientBoostingRegressor)):
                         vals = [0.0001, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999, 0.9999]
+                    elif isinstance(clf, (RidgeClassifier)):
+                        # vals = [0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1]
+                        vals = [1]
                     else:
-                        vals = [100000, 10000, 1000, 100, 10, 1, 0.1, 0.01, 0.001, 0.0001, 0.00001]
+                        vals = [0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1]
                     # if hasattr(clf, 'learning_rate') and clf.learning_rate == 'optimal':
                     #     del vals[-1]
                     grid_param_dict['alpha'] = vals
@@ -333,7 +346,7 @@ def predict(df: pd.DataFrame
 
                 # L1_RATIO
                 if 'l1_ratio' in clf.get_params().keys():
-                    grid_param_dict['l1_ratio'] = [.1, .5, .7, .9, .95, .99, 1]
+                    grid_param_dict['l1_ratio'] = [.01, .1, .5, .7, .9, .95, .99, 1]
 
                 # GAMMA
                 if 'gamma' in clf.get_params().keys():
@@ -386,7 +399,7 @@ def predict(df: pd.DataFrame
                 if 'metric' in clf.get_params().keys():
                     if isinstance(clf, (NearestCentroid)):
                         grid_param_dict['metric'] = ['euclidean', 'manhattan']
-                    if isinstance(clf, (KNeighborsRegressor, KNeighborsClassifier)):
+                    elif isinstance(clf, (KNeighborsRegressor, KNeighborsClassifier)):
                         grid_param_dict['metric'] = ['euclidean', 'manhattan', 'minkowski', 'chebyshev']
                         # NOTE: wminkowski doesn't seem to work in here. Might be a bug in sklearn 0.19.
                         # NOTE: I deliberately left out seuclidean and mahalanobis because they were too much trouble.
@@ -414,17 +427,6 @@ def predict(df: pd.DataFrame
                 print('Grid Regression Best Score:', grid.best_score_)
                 print('Grid Regression Best Estimator:', grid.best_estimator_)
                 clf = grid.best_estimator_
-
-            elif selection_limit < 1.0:
-                scores, p_vals = sk_feat_sel.f_regression(x_train, y_train, center=False)
-                for x_field_name in list(x_fields.keys()):
-                    xcol_indices = [idx for idx, vals in enumerate(x_columns) if vals[2] == x_field_name]
-                    if all(p_vals[idx] > selection_limit or p_vals[idx] == np.nan for idx in xcol_indices):
-                        x_fields.pop(x_field_name)
-
-                x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
-
-                x_train = fix_np_nan(x_train)
 
             clf.fit(x_train, y_train)
             print("------ Model Training Complete [{0}] ------\n".format(mt))
@@ -668,8 +670,8 @@ def predict(df: pd.DataFrame
                         print(*[exp(v) for v in intercept], sep='\n')
                     try:
                         preds = clf.predict(x_test)
-                    except TypeError as e:
-                        if "dense data is required" in str(e):
+                    except (TypeError, ValueError) as e:
+                        if "dense data" in str(e):
                             x_test = x_test.toarray()
                             use_sparse = False
                             preds = clf.predict(x_test)
