@@ -50,36 +50,67 @@ from sklearn.metrics import r2_score
 from scipy.special import expit
 from sklearn import metrics
 import warnings
+import hashlib
+from tinydb import TinyDB, Query
 
 pd.options.mode.chained_assignment = None
 
 global use_sparse, verbose, s, new_fields
 use_sparse = True
 
-
 class ModelSet:
     def __init__(self,
                  final_models: Union[str, list],
                  initial_models: Union[str, list]=list(),
-                 load_init_models: bool=True,
-                 load_final_models: bool=True):
+                 # model_loading: str=None  # options: None, 'init', 'all'
+                 ):
 
         if isinstance(final_models, str):
             final_models = [final_models]
         if isinstance(initial_models, str):
             initial_models = [initial_models]
-        self.final_models = final_models
-        self.initial_models = initial_models
-        self.load_init_models = load_init_models
-        self.load_final_models = load_final_models
+
+        self.initial_models = [Model(v, 'stack') for v in initial_models]
+        self.final_models = [Model(v, 'final') for v in final_models]
+        # self.model_loading = model_loading
 
     def get_models(self):
-        model_list = [(v, 'stack') for v in self.initial_models]
-        model_list.extend([(v, 'final') for v in self.final_models])
-        return model_list
+        return self.initial_models + self.final_models
+
+    # def get_trained_models(self):
+    #     model_list = [(v, 'stack') for v in self.initial_models]
+    #     model_list.extend([(v, 'final') for v in self.final_models])
+    #     return model_list
+
+    def set_final_models(self, new_models):
+        for old_model in self.final_models:
+            for new_model in new_models.final_models:
+                if new_model.get_info() == old_model.get_info():
+                    old_model.trained_model = new_model.trained_model
+                    old_model.grid_param_dict = new_model.grid_param_dict
+                    break
 
     def __str__(self):
         return 'modelset_{0}stacked'.format(len(self.initial_models))
+
+class Model:
+    def __init__(self,
+                 model_class: str,
+                 model_usage: str,
+                 trained_model: object=None,
+                 grid_param_dict: dict=None):
+
+        self.model_class = model_class
+        self.model_usage = model_usage
+        self.trained_model = trained_model
+        self.grid_param_dict = grid_param_dict
+        self.is_custom = not isinstance(model_class, str)
+
+    def get_info(self):
+        return self.model_class, self.model_usage
+
+    def __str__(self):
+        return self.model_class + '_' + self.model_usage
 
 def predict(df: pd.DataFrame
             , x_fields: dict
@@ -109,26 +140,40 @@ def predict(df: pd.DataFrame
         warnings.filterwarnings("ignore", category=UserWarning)
         warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-    model_dir = s.get_model_dir()
-    # os.makedirs(model_dir, exist_ok=True)
-
-    if isinstance(model_type, list):
+    elif isinstance(model_type, list):
         model_type = ModelSet(model_type[-1], model_type[:-1])
     elif isinstance(model_type, str):
         model_type = ModelSet(model_type)
 
-    predictive_model_file = '{0}\pred_model_{1}.p'.format(model_dir, model_type)
+    model_dir = s.get_model_dir()
+    # os.makedirs(model_dir, exist_ok=True)
 
-    mappings_file = '%s\%s' % (model_dir, 'data_mappings.p')
+    # if model_loading in ['init']:
+    #     db = TinyDB(s.get_default_data_dir() + '/db.json')
+    #     q = Query()
+    #     query_result = db.search(
+    #         [q.x_fields == x_fields,
+    #          q.y_field == y_field,
+    #          q.init_models == model_type.get_init_models()])
+    #     if show_model_tests:
+    #         x_test = query_result[0]['x_test']
+    #     query_result = db.search((q.x_fields == x_fields) &
+    #                              (q.y_field == y_field) &
+    #                              (q.init_models == model_type.get_init_models()) &
+    #                              (q.predict_all == predict_all))
+    #     x_validate = query_result[0]['x_validate']
 
-    for k in list(y_field.keys()):
-        df[k].replace('', np.nan, inplace=True)
+    predictive_model_file = '{0}/{1}'.format(model_dir, 'pred_models.p')
+    mappings_file = '{0}/{1}'.format(model_dir, 'data_mappings.p')
+
+    for key in list(y_field.keys()):
+        df[key].replace('', np.nan, inplace=True)
         # print("Value Counts in dataframe\n", df[k].value_counts())
         if predict_all:
             mask_validate = np.asarray([True for v in range(df.shape[0])], dtype=np.bool)
         else:
-            mask_validate = df[k].isnull()
-        mask_train_test = ~df[k].isnull()
+            mask_validate = df[key].isnull()
+        mask_train_test = ~df[key].isnull()
         # print('Final Status field\n', df[k])
         # print('Value Counts\n', mask_train_test.value_counts())
         # print('DF Length\n', len(df[k]))
@@ -136,15 +181,15 @@ def predict(df: pd.DataFrame
 
         mask_train_test_qty_true = mask_train_test.value_counts().loc[True]
 
-        train_pct = min(train_pct, max_train_size / (len(df[k]) - mask_train_test_qty_true))
-        test_pct = min((1-train_pct), max_train_size / (len(df[k]) - mask_train_test_qty_true))
+        train_pct = min(train_pct, max_train_size / (len(df[key]) - mask_train_test_qty_true))
+        test_pct = min((1-train_pct), max_train_size / (len(df[key]) - mask_train_test_qty_true))
 
         if verbose:
             print("Train data fraction:", train_pct)
             print("Test data fraction:", test_pct)
 
         if random_train_test:
-            mask = np.random.rand(len(df[k]))
+            mask = np.random.rand(len(df[key]))
             mask_train = [a and b for a, b in zip(mask <= train_pct, mask_train_test != False)]
             mask_test = [a and b for a, b in zip(mask > (1-test_pct), mask_train_test != False)]
         else:
@@ -169,7 +214,13 @@ def predict(df: pd.DataFrame
         with open(mappings_file, 'rb') as pickle_file:
             x_mappings, y_mappings = pickle.load(pickle_file)
         with open(predictive_model_file, 'rb') as pickle_file:
-            clf, = pickle.load(pickle_file)
+            loaded_models, = pickle.load(pickle_file)
+
+            # IF THERE ARE ANY PREEXISTING MODELS, USE THEM RATHER THAN RETRAINING THEM UNNECESSARILY
+            model_compare = [m1.get_info() == m2.get_info() for m1, m2 in zip(model_type.initial_models, loaded_models.initial_models)]
+            if all(model_compare):
+                model_type.set_final_models(loaded_models)
+
         print('Successfully loaded the mappings and predictive model.')
     except (FileNotFoundError, ValueError) as e:
         print(e)
@@ -199,334 +250,340 @@ def predict(df: pd.DataFrame
             x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
             x_train = fix_np_nan(x_train)
 
-        for idx, (mt, order) in enumerate(model_type.get_models()):
+    for idx, model in enumerate(model_type.get_models()):
 
-            # print(x_train.shape)
-            if verbose:
-                print('FIELDS\n', np.asarray(list(x_fields.keys())))
-            # y_train, uniques_index = pd.factorize(train[y_fields])
+        mt = model.model_class
 
-            if not isinstance(mt, str) and hasattr(mt, 'fit'):
-                clf = mt
-                mt = 'custom'
-            elif mt == 'rfor':
+        # INITIAL AND FINAL MODELS: TRAIN ANY UNTRAINED MODELS
+        # print(x_train.shape)
+        if verbose:
+            print('FIELDS\n', np.asarray(list(x_fields.keys())))
+        # y_train, uniques_index = pd.factorize(train[y_fields])
+
+        if model.is_custom:
+            if hasattr(model.model_class, 'fit'):
+                clf = model.model_class
+                model.model_class = type(clf)
+        else:
+            if model.model_class == 'rfor':
                 clf = RandomForestClassifier(n_estimators=31)
-            elif mt == 'rfor_r':
+            elif model.model_class == 'rfor_r':
                 clf = RandomForestRegressor(n_estimators=31)
-            elif mt == 'rtree':
+            elif model.model_class == 'rtree':
                 clf = RandomTreesEmbedding()
-            elif mt == 'etree_r':
+            elif model.model_class == 'etree_r':
                 clf = ExtraTreesRegressor()
-            elif mt == 'etree_c':
+            elif model.model_class == 'etree_c':
                 clf = ExtraTreesClassifier()
-            elif mt == 'logit':
+            elif model.model_class == 'logit':
                 clf = LogisticRegression()
-            elif mt == 'linreg':
+            elif model.model_class == 'linreg':
                 clf = LinearRegression()
-            elif mt == 'ridge':
+            elif model.model_class == 'ridge':
                 clf = Ridge()
-            elif mt == 'ridge_c':
+            elif model.model_class == 'ridge_c':
                 clf = RidgeClassifier()
-            elif mt == 'lars':
+            elif model.model_class == 'lars':
                 clf = Lars()
-            elif mt == 'lasso':
+            elif model.model_class == 'lasso':
                 clf = Lasso()
-            elif mt == 'lasso_lars':
+            elif model.model_class == 'lasso_lars':
                 clf = LassoLars()
-            elif mt == 'lasso_mt':
+            elif model.model_class == 'lasso_mt':
                 clf = MultiTaskLasso()
-            elif mt == 'omp':
+            elif model.model_class == 'omp':
                 clf = OrthogonalMatchingPursuit()
-            elif mt == 'elastic_net':
+            elif model.model_class == 'elastic_net':
                 clf = ElasticNet()
-            elif mt == 'elastic_net_stacking':
+            elif model.model_class == 'elastic_net_stacking':
                 clf = ElasticNet(positive=True)  # Used positive=True to make this ideal for stacking
-            elif mt == 'neural_c':
+            elif model.model_class == 'neural_c':
                 clf = MLPClassifier(learning_rate='adaptive', learning_rate_init=0.1)
-            elif mt == 'neural_r':
+            elif model.model_class == 'neural_r':
                 clf = MLPRegressor(learning_rate='adaptive', learning_rate_init=0.1)
-            elif mt == 'svc':
+            elif model.model_class == 'svc':
                 clf = SVC()
-            elif mt == 'svr':
+            elif model.model_class == 'svr':
                 clf = SVR()
-            elif mt == 'nu_svc':
+            elif model.model_class == 'nu_svc':
                 clf = NuSVC()
-            elif mt == 'nu_svr':
+            elif model.model_class == 'nu_svr':
                 clf = NuSVR()
-            elif mt == 'gbc':
+            elif model.model_class == 'gbc':
                 clf = GradientBoostingClassifier(n_estimators=int(round(x_train.shape[0]/20, 0)))
-            elif mt == 'gbr':
+            elif model.model_class == 'gbr':
                 clf = GradientBoostingRegressor(n_estimators=int(round(x_train.shape[0]/20, 0)))
-            elif mt == 'abc':
+            elif model.model_class == 'abc':
                 clf = AdaBoostClassifier(n_estimators=int(round(x_train.shape[0]/20, 0)))
-            elif mt == 'knn_c':
+            elif model.model_class == 'knn_c':
                 clf = KNeighborsClassifier()
-            elif mt == 'knn_r':
+            elif model.model_class == 'knn_r':
                 clf = KNeighborsRegressor()
-            elif mt == 'linear_svc':
+            elif model.model_class == 'linear_svc':
                 clf = LinearSVC()
-            elif mt == 'sgd_c':
+            elif model.model_class == 'sgd_c':
                 clf = SGDClassifier()
-            elif mt == 'sgd_r':
+            elif model.model_class == 'sgd_r':
                 clf = SGDRegressor()
-            elif mt == 'pass_agg_c':
+            elif model.model_class == 'pass_agg_c':
                 clf = PassiveAggressiveClassifier()
-            elif mt == 'pass_agg_r':
+            elif model.model_class == 'pass_agg_r':
                 clf = PassiveAggressiveRegressor()
-            elif mt == 'bernoulli_nb':
+            elif model.model_class == 'bernoulli_nb':
                 clf = BernoulliNB()
-            elif mt == 'bernoulli_rbm':
+            elif model.model_class == 'bernoulli_rbm':
                 clf = BernoulliRBM()
-            elif mt == 'multinomial_nb':
+            elif model.model_class == 'multinomial_nb':
                 clf = MultinomialNB()
-            elif mt == 'nearest_centroid':
+            elif model.model_class == 'nearest_centroid':
                 clf = NearestCentroid()
             else:
-                raise ValueError('Incorrect model_type given. Cannot match [%s] to a model.' % mt)
+                raise ValueError('Incorrect model_type given. Cannot match [%s] to a model.' % model.model_class)
 
-            global use_sparse
-            if isinstance(clf, (GradientBoostingRegressor, KNeighborsClassifier, KNeighborsRegressor, SVR
-                                , MultiTaskLasso, LassoLars)):
-                use_sparse = False
-                if not isinstance(x_train, (np.ndarray)):
-                    x_train = x_train.toarray()
-                if not isinstance(y_train, (np.ndarray)):
-                    y_train = y_train.toarray().reshape(-1, 1)
-            else:
-                use_sparse = True
-
-            if 'random_state' in clf.get_params().keys():
-                clf.random_state = 555
-            if 'verbose' in clf.get_params().keys():
-                clf.verbose = verbose
-            if 'probability' in clf.get_params().keys():
-                clf.probability = True
             if 'max_iter' in clf.get_params().keys():
                 if (not clf.max_iter) or (clf.max_iter < 10000):
                     clf.max_iter = 10000
-            # if 'learning_rate' in clf.get_params().keys():
-            #     clf.learning_rate = 'adaptive'
-            # if 'learning_rate_init' in clf.get_params().keys():
-            #     clf.learning_rate_init = 0.1
 
-            mask_all = np.asarray([True for v in range(df.shape[0])], dtype=np.bool)
-            # print("NaN in x_train: %s" % np.isnan(x_train.data).any())
-            # print("NaN in y_train: %s" % np.isnan(y_train.data).any())
+        global use_sparse
+        if isinstance(clf, (GradientBoostingRegressor, GradientBoostingClassifier,
+                            KNeighborsClassifier, KNeighborsRegressor, SVR
+                            , MultiTaskLasso, LassoLars)):
+            use_sparse = False
+            if not isinstance(x_train, (np.ndarray)):
+                x_train = x_train.toarray()
+            if not isinstance(y_train, (np.ndarray)):
+                y_train = y_train.toarray().reshape(-1, 1)
+        else:
+            use_sparse = True
 
-            print("\n----- Training Predictive Model [{0}] -----".format(mt))
+        if 'random_state' in clf.get_params().keys():
+            clf.random_state = 555
+        if 'verbose' in clf.get_params().keys():
+            clf.verbose = verbose
+        if 'probability' in clf.get_params().keys():
+            clf.probability = True
 
-            if mt != 'custom':
-                grid_param_dict = dict()
+        mask_all = np.asarray([True for v in range(df.shape[0])], dtype=np.bool)
+        # print("NaN in x_train: %s" % np.isnan(x_train.data).any())
+        # print("NaN in y_train: %s" % np.isnan(y_train.data).any())
 
-                # CLASS_WEIGHT
-                if 'class_weight' in clf.get_params().keys():
-                    clf.class_weight = 'balanced'
+        print("\n----- Training Predictive Model [{0}] -----".format(model.model_class))
 
-                # BOOTSTRAP
-                if 'bootstrap' in clf.get_params().keys():
-                    clf.bootstrap = True
+        if not model.is_custom:
+            grid_param_dict = dict()
 
-                # ALPHAS
-                if 'alpha' in clf.get_params().keys():
-                    if isinstance(clf, (GradientBoostingRegressor)):
-                        vals = [0.0001, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999, 0.9999]
-                    elif isinstance(clf, (RidgeClassifier)):
-                        # vals = [0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1]
-                        vals = [1]
+            # CLASS_WEIGHT
+            if 'class_weight' in clf.get_params().keys():
+                clf.class_weight = 'balanced'
+
+            # BOOTSTRAP
+            if 'bootstrap' in clf.get_params().keys():
+                clf.bootstrap = True
+
+            # ALPHAS
+            if 'alpha' in clf.get_params().keys():
+                if isinstance(clf, (GradientBoostingRegressor)):
+                    vals = [0.0001, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999, 0.9999]
+                elif isinstance(clf, (RidgeClassifier)):
+                    # vals = [0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1]
+                    vals = [1]
+                else:
+                    vals = [0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1]
+                # if hasattr(clf, 'learning_rate') and clf.learning_rate == 'optimal':
+                #     del vals[-1]
+                grid_param_dict['alpha'] = vals
+
+            # TOLS
+            # if 'tol' in clf.get_params().keys():
+            #     grid_param_dict['tol'] = [0.1, 0.01, 0.001, 0.0001, 0.00001]
+
+            # N_NEIGHBORS
+            if 'n_neighbors' in clf.get_params().keys():
+                grid_param_dict['n_neighbors'] = [2, 3, 4, 5, 6, 7, 8, 9]
+
+            # SELECTION
+            if 'selection' in clf.get_params().keys():
+                grid_param_dict['selection'] = ['cyclic','random']
+
+            # L1_RATIO
+            if 'l1_ratio' in clf.get_params().keys():
+                grid_param_dict['l1_ratio'] = [.01, .1, .5, .7, .9, .95, .99, 1]
+
+            # GAMMA
+            if 'gamma' in clf.get_params().keys():
+                gamma_range = np.logspace(-9, 3, 13)
+                grid_param_dict['gamma'] = gamma_range
+
+            # C
+            if 'C' in clf.get_params().keys():
+                C_range = np.logspace(0, 10, 11)
+                grid_param_dict['C'] = C_range
+
+            # LOSSES
+            if 'loss' in clf.get_params().keys():
+                if isinstance(clf, (PassiveAggressiveClassifier)):
+                    grid_param_dict['loss'] = ['hinge', 'squared_hinge']
+                elif isinstance(clf, (PassiveAggressiveRegressor)):
+                    grid_param_dict['loss'] = ['epsilon_insensitive', 'squared_epsilon_insensitive']
+                elif isinstance(clf, (SGDClassifier, SGDRegressor)):
+                    grid_param_dict['loss'] = ['squared_loss', 'huber', 'epsilon_insensitive'
+                        , 'squared_epsilon_insensitive']
+                else:
+                    grid_param_dict['loss'] = clf._SUPPORTED_LOSS
+
+            # WEIGHTS
+            if 'weights' in clf.get_params().keys():
+                if isinstance(clf, (KNeighborsClassifier, KNeighborsRegressor)):
+                    grid_param_dict['weights'] = ['uniform', 'distance']
+                else:
+                    print('Unspecified parameter "weights" for ', type(clf))
+
+            # P
+            if 'p' in clf.get_params().keys():
+                if isinstance(clf, (KNeighborsClassifier, KNeighborsRegressor)):
+                    grid_param_dict['p'] = [1, 2, 3]
+                else:
+                    print('Unspecified parameter "p" for ', type(clf))
+
+            # KERNELS
+            if 'kernel' in clf.get_params().keys():
+                if isinstance(clf, (SVC, SVR)):
+                    grid_param_dict['kernel'] = ['linear','poly','rbf','sigmoid']  # LINEAR IS 'Work in progress.' as of 0.19
+                else:
+                    print('Unspecified parameter "kernel" for ', type(clf))
+
+            # NU
+            if 'nu' in clf.get_params().keys():
+                grid_param_dict['nu'] = [0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999]
+
+            # METRICS
+            if 'metric' in clf.get_params().keys():
+                if isinstance(clf, (NearestCentroid)):
+                    grid_param_dict['metric'] = ['euclidean', 'manhattan']
+                elif isinstance(clf, (KNeighborsRegressor, KNeighborsClassifier)):
+                    grid_param_dict['metric'] = ['euclidean', 'manhattan', 'minkowski', 'chebyshev']
+                    # NOTE: wminkowski doesn't seem to work in here. Might be a bug in sklearn 0.19.
+                    # NOTE: I deliberately left out seuclidean and mahalanobis because they were too much trouble.
+                else:
+                    print('Unspecified parameter "metric" for ', type(clf))
+
+            while True:
+                try:
+                    # grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
+                    if 'windows' in platform.system().lower():
+                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict)
                     else:
-                        vals = [0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1]
-                    # if hasattr(clf, 'learning_rate') and clf.learning_rate == 'optimal':
-                    #     del vals[-1]
-                    grid_param_dict['alpha'] = vals
+                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
 
-                # TOLS
-                # if 'tol' in clf.get_params().keys():
-                #     grid_param_dict['tol'] = [0.1, 0.01, 0.001, 0.0001, 0.00001]
-
-                # N_NEIGHBORS
-                if 'n_neighbors' in clf.get_params().keys():
-                    grid_param_dict['n_neighbors'] = [2, 3, 4, 5, 6, 7, 8, 9]
-
-                # SELECTION
-                if 'selection' in clf.get_params().keys():
-                    grid_param_dict['selection'] = ['cyclic','random']
-
-                # L1_RATIO
-                if 'l1_ratio' in clf.get_params().keys():
-                    grid_param_dict['l1_ratio'] = [.01, .1, .5, .7, .9, .95, .99, 1]
-
-                # GAMMA
-                if 'gamma' in clf.get_params().keys():
-                    gamma_range = np.logspace(-9, 3, 13)
-                    grid_param_dict['gamma'] = gamma_range
-
-                # C
-                if 'C' in clf.get_params().keys():
-                    C_range = np.logspace(0, 10, 11)
-                    grid_param_dict['C'] = C_range
-
-                # LOSSES
-                if 'loss' in clf.get_params().keys():
-                    if isinstance(clf, (PassiveAggressiveClassifier)):
-                        grid_param_dict['loss'] = ['hinge', 'squared_hinge']
-                    elif isinstance(clf, (PassiveAggressiveRegressor)):
-                        grid_param_dict['loss'] = ['epsilon_insensitive', 'squared_epsilon_insensitive']
-                    elif isinstance(clf, (SGDClassifier, SGDRegressor)):
-                        grid_param_dict['loss'] = ['squared_loss', 'huber', 'epsilon_insensitive'
-                            , 'squared_epsilon_insensitive']
+                    if (model.trained_model is not None) & (model.grid_param_dict == grid_param_dict):
+                        clf = model.trained_model
                     else:
-                        grid_param_dict['loss'] = clf._SUPPORTED_LOSS
 
-                # WEIGHTS
-                if 'weights' in clf.get_params().keys():
-                    if isinstance(clf, (KNeighborsClassifier, KNeighborsRegressor)):
-                        grid_param_dict['weights'] = ['uniform', 'distance']
-                    else:
-                        print('Unspecified parameter "weights" for ', type(clf))
+                        grid, x_train = resilient_fit(grid, x_train, y_train)
 
-                # P
-                if 'p' in clf.get_params().keys():
-                    if isinstance(clf, (KNeighborsClassifier, KNeighborsRegressor)):
-                        grid_param_dict['p'] = [1, 2, 3]
-                    else:
-                        print('Unspecified parameter "p" for ', type(clf))
+                        print(grid)
+                        # summarize the results of the grid search
+                        print('Grid Regression Best Score:', grid.best_score_)
+                        print('Grid Regression Best Estimator:', grid.best_estimator_)
+                        clf = grid.best_estimator_
+                        model.trained_model = clf
+                        model.grid_param_dict = grid_param_dict
+                    break
 
-                # KERNELS
-                if 'kernel' in clf.get_params().keys():
-                    if isinstance(clf, (SVC, SVR)):
-                        grid_param_dict['kernel'] = ['linear','poly','rbf','sigmoid']  # LINEAR IS 'Work in progress.' as of 0.19
-                    else:
-                        print('Unspecified parameter "kernel" for ', type(clf))
-
-                # NU
-                if 'nu' in clf.get_params().keys():
-                    grid_param_dict['nu'] = [0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999]
-
-                # METRICS
-                if 'metric' in clf.get_params().keys():
-                    if isinstance(clf, (NearestCentroid)):
-                        grid_param_dict['metric'] = ['euclidean', 'manhattan']
-                    elif isinstance(clf, (KNeighborsRegressor, KNeighborsClassifier)):
-                        grid_param_dict['metric'] = ['euclidean', 'manhattan', 'minkowski', 'chebyshev']
-                        # NOTE: wminkowski doesn't seem to work in here. Might be a bug in sklearn 0.19.
-                        # NOTE: I deliberately left out seuclidean and mahalanobis because they were too much trouble.
-                    else:
-                        print('Unspecified parameter "metric" for ', type(clf))
-
-                while True:
-                    try:
-                        # grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
-                        if 'windows' in platform.system().lower():
-                            grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict)
-                        else:
-                            grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
-
-                        grid.fit(x_train, y_train)
-                        break
-                    except ValueError as e:
-                        if 'Invalid parameter ' in str(e):
-                            grid_param_dict.pop(str(e).split(' ')[2])
-                        else:
-                            raise e
+                except (ValueError) as e:
+                    if 'Invalid parameter ' in str(e):
+                        grid_param_dict.pop(str(e).split(' ')[2])
                         pass
-                print(grid)
-                # summarize the results of the grid search
-                print('Grid Regression Best Score:', grid.best_score_)
-                print('Grid Regression Best Estimator:', grid.best_estimator_)
-                clf = grid.best_estimator_
-
-            clf.fit(x_train, y_train)
-            print("------ Model Training Complete [{0}] ------\n".format(mt))
-
-
-            # Loop until you reach the very last predictive model, iteratively adding the predictions from each model
-            #  to the dataframe and including those predictions in each successive model training process
-            if order == 'stack':
-                max_slice_size = 100000
-                y_all = list()
-                # y_all_probs = list()
-                for s in range(0, int(math.ceil(len(df.index) / max_slice_size))):
-                    min_idx = s * max_slice_size
-                    max_idx = min(len(df.index), (s + 1) * max_slice_size)
-                    print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
-
-                    df_valid_iter = df[mask_all].iloc[min_idx:max_idx]
-                    x_valid_columns, x_all, x_mappings = get_vectors(df_valid_iter, x_fields, x_mappings)
-                    x_all = fix_np_nan(x_all)
-
-                    # print(x_validate)
-                    calculate_probs = hasattr(clf, 'classes_') \
-                                      and hasattr(clf, 'predict_proba') \
-                                      and not (hasattr(clf, 'loss') and clf.loss == 'hinge')
-                    try:
-                        preds = clf.predict(x_all)
-                    except TypeError as e:
-                        if "dense data is required" in str(e):
-                            x_all = x_all.toarray()
-                            use_sparse = False
-                            preds = clf.predict(x_all)
-                            pass
-                    except DeprecationWarning as e:
-                        print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
-                        print(e)
-                        x_all = x_all.reshape(-1, 1)
-                        preds = clf.predict(x_all)
-                        pass
-                    finally:
-                        if calculate_probs:
-                            pred_probs = clf.predict_proba(x_all)
-                        y_all.append(preds)
-
-                # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
-                y_all = np.hstack(y_all).reshape(-1, 1)
-
-                # Generate predictions for this predictive model, for all values. Add them to the DF so they can be
-                #  used as predictor variables (e.g. "stacked" upon) later when the next predictive model is run.
-                for k, v in y_field.items():
-                    # y_all = np.atleast_1d(y_all)
-                    preds = y_mappings[k].inverse_transform(y_all)
-                    print('INTERMEDIATE PREDICTIONS')
-                    print("First 10: ", *preds[:10])
-                    print("Last 10: ", *preds[-10:])
-
-
-                    new_x_fields = {}
-                    if calculate_probs:
-                        prob_field_names = [k + '_' + mt + '_prob_' + f.lower().replace(' ', '_') for f in
-                                       list(y_mappings[k].classes_)[:pred_probs.shape[1]]]
-                        prob_field_names = [get_unique_name(v, df.columns.values) for v in prob_field_names]
-                        df_probs = pd.DataFrame(data=pred_probs
-                                                , columns=prob_field_names
-                                                , index=df_valid_iter.index)
-                        df_probs = df_probs.loc[:, df_probs.columns.values[:-1]]
-                        for f in df_probs.columns.values:
-                            new_x_fields[f] = 'num'
-                        df = df.join(df_probs, how='inner')
-                        print('Unique probabilities: ', len(np.unique(pred_probs)))
-                        print('Probability variance: ', np.var(pred_probs))
-
                     else:
-                        pred_field_name = get_unique_name('{0}_pred_{1}'.format(k, mt), df.columns.values)
-                        df[pred_field_name] = preds
-                        new_x_fields[pred_field_name] = 'cat' if not isinstance(v, str) else v
-                        print('Unique predictions: ', len(np.unique(preds)))
-
-                    x_fields = {**x_fields, **new_x_fields}
-                    x_mappings = {**x_mappings, **train_models(df[mask_train], new_x_fields)}
-                    new_x_columns, new_x_train, x_mappings = get_vectors(df[mask_train], new_x_fields, x_mappings)
-                    x_columns += new_x_columns
-                    new_x_train = fix_np_nan(new_x_train)
-                    # new_x_train = sparse.csc_matrix(np.hstack(new_x_train))
-                    x_train = matrix_hstack((x_train, new_x_train), return_sparse=True)
-
-                if hasattr(clf, 'intercept_') and (isinstance(clf.intercept_, (list)) and len(clf.intercept_) == 1):
-                    print('--- Model over-normalization testing ---\n'
-                          'Intercept/Expit/Exp = {0} / {1} / {2}'
-                          .format(format(clf.intercept_[0], '.4f')
-                                  , format(expit(clf.intercept_[0]), '.4f')
-                                  , format(exp(clf.intercept_[0])), '.4f'))
-
+                        raise e
+        else:
+            if clf.get_params() == model.trained_model.get_params():
+                clf = model.trained_model
             else:
+                clf, x_train = resilient_fit(clf, x_train, y_train)
+                model.trained_model = clf
+
+        print("------ Model Training Complete [{0}] ------\n".format(model.model_class))
+
+        # STACKED MODELS ONLY: ADD PREDICTIONS TO THE DATASET BEFORE LOOPING
+        # Loop until you reach the very last predictive model, iteratively adding the predictions from each model
+        #  to the dataframe and including those predictions in each successive model training process
+        if model.model_usage == 'stack':
+            max_slice_size = 100000
+            y_all = list()
+            # y_all_probs = list()
+            for s in range(0, int(math.ceil(len(df.index) / max_slice_size))):
+                min_idx = s * max_slice_size
+                max_idx = min(len(df.index), (s + 1) * max_slice_size)
+                print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
+
+                df_valid_iter = df[mask_all].iloc[min_idx:max_idx]
+                x_valid_columns, x_all, x_mappings = get_vectors(df_valid_iter, x_fields, x_mappings)
+                x_all = fix_np_nan(x_all)
+
+                # print(x_validate)
+                calculate_probs = hasattr(clf, 'classes_') \
+                                  and hasattr(clf, 'predict_proba') \
+                                  and not (hasattr(clf, 'loss') and clf.loss == 'hinge')
+
+                preds, x_all = resilient_predict(clf, x_all)
+                if calculate_probs:
+                    pred_probs = resilient_predict_probs(clf, x_all)
+                y_all.append(preds)
+
+            # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
+            y_all = np.hstack(y_all).reshape(-1, 1)
+
+            # Generate predictions for this predictive model, for all values. Add them to the DF so they can be
+            #  used as predictor variables (e.g. "stacked" upon) later when the next predictive model is run.
+            for k, v in y_field.items():
+                # y_all = np.atleast_1d(y_all)
+                preds = y_mappings[k].inverse_transform(y_all)
+                print('INTERMEDIATE PREDICTIONS')
+                print("First 10: ", *preds[:10])
+                print("Last 10: ", *preds[-10:])
+
+                new_x_fields = {}
+                if calculate_probs:
+                    prob_field_names = [k + '_' + model.model_class + '_prob_' + f.lower().replace(' ', '_') for f in
+                                        list(y_mappings[k].classes_)[:pred_probs.shape[1]]]
+                    prob_field_names = [get_unique_name(v, df.columns.values) for v in prob_field_names]
+                    df_probs = pd.DataFrame(data=pred_probs
+                                            , columns=prob_field_names
+                                            , index=df_valid_iter.index)
+                    df_probs = df_probs.loc[:, df_probs.columns.values[:-1]]
+                    for f in df_probs.columns.values:
+                        new_x_fields[f] = 'num'
+                    df = df.join(df_probs, how='inner')
+                    print('Unique probabilities: ', len(np.unique(pred_probs)))
+                    print('Probability variance: ', np.var(pred_probs))
+
+                else:
+                    pred_field_name = get_unique_name('{0}_pred_{1}'.format(k, model.model_class), df.columns.values)
+                    df[pred_field_name] = preds
+                    new_x_fields[pred_field_name] = 'cat' if not isinstance(v, str) else v
+                    print('Unique predictions: ', len(np.unique(preds)))
+
+                x_fields = {**x_fields, **new_x_fields}
+                x_mappings = {**x_mappings, **train_models(df[mask_train], new_x_fields)}
+                new_x_columns, new_x_train, x_mappings = get_vectors(df[mask_train], new_x_fields, x_mappings)
+                x_columns += new_x_columns
+                new_x_train = fix_np_nan(new_x_train)
+                # new_x_train = sparse.csc_matrix(np.hstack(new_x_train))
+                x_train = matrix_hstack((x_train, new_x_train), return_sparse=True)
+
+            if hasattr(clf, 'intercept_') and (isinstance(clf.intercept_, (list)) and len(clf.intercept_) == 1):
+                print('--- Model over-normalization testing ---\n'
+                      'Intercept/Expit/Exp = {0} / {1} / {2}'
+                      .format(format(clf.intercept_[0], '.4f')
+                              , format(expit(clf.intercept_[0]), '.4f')
+                              , format(exp(clf.intercept_[0])), '.4f'))
+
+        # FINAL MODELS ONLY: RUN THE MODEL ON THE VALIDATION SET TO GENERATE PREDICTIONS
+        elif model.model_usage == 'final':
+
+            # INITIAL AND FINAL MODELS: SHOW MODEL TESTS
+            if show_model_tests:
                 print("--------------------------\n"
                       "-- TEST SET APPLICATION --\n"
                       "--------------------------")
@@ -675,13 +732,8 @@ def predict(df: pd.DataFrame
 
                         print('INTERCEPT (EXP)')
                         print(*[exp(v) for v in intercept], sep='\n')
-                    try:
-                        preds = clf.predict(x_test)
-                    except (TypeError, ValueError) as e:
-                        if "dense data" in str(e):
-                            x_test = x_test.toarray()
-                            use_sparse = False
-                            preds = clf.predict(x_test)
+
+                    preds, x_test = resilient_predict(clf, x_test)
                     print('R2 SCORE\n', r2_score(y_test, preds))
 
                     if hasattr(clf, 'classes_'):
@@ -689,7 +741,7 @@ def predict(df: pd.DataFrame
                         print(clf.classes_)
                         print('ACCURACY:\n', metrics.accuracy_score(y_test, preds))
                         try:
-                            y_test_probs = clf.predict_proba(x_test)
+                            y_test_probs, x_test = resilient_predict_probs(clf, x_test)
                             if y_test_probs.shape[1] <= 2:
                                 print('ROC-CURVE AOC', metrics.roc_auc_score(y_test, y_test_probs[:, 1]))
 
@@ -721,96 +773,86 @@ def predict(df: pd.DataFrame
 
                     pass
 
-                print("--------------------------------\n"
-                      "-- VALIDATION SET APPLICATION --\n"
-                      "--------------------------------")
-                # CREATE X_VALIDATE
-                df_validate = df.loc[mask_validate, :]
+            print("--------------------------------\n"
+                  "-- VALIDATION SET APPLICATION --\n"
+                  "--------------------------------")
+            # CREATE X_VALIDATE
+            df_validate = df.loc[mask_validate, :]
 
-                # ITERATE OVER THE df_validate in groups of 100K rows (to avoid memory errors) and predict outcomes
-                max_slice_size = 100000
-                y_validate = list()
-                y_validate_probs = list()
-                for s in range(0, int(math.ceil(len(df_validate.index) / max_slice_size))):
-                    min_idx = s * max_slice_size
-                    max_idx = min(len(df_validate.index), (s + 1) * max_slice_size)
-                    print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
+            # ITERATE OVER THE df_validate in groups of 100K rows (to avoid memory errors) and predict outcomes
+            max_slice_size = 100000
+            y_validate = list()
+            y_validate_probs = list()
+            for s in range(0, int(math.ceil(len(df_validate.index) / max_slice_size))):
+                min_idx = s * max_slice_size
+                max_idx = min(len(df_validate.index), (s + 1) * max_slice_size)
+                print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
 
-                    df_valid_iter = df[mask_validate].iloc[min_idx:max_idx]
-                    x_valid_columns, x_validate, x_mappings = get_vectors(df_valid_iter, x_fields, x_mappings)
+                df_valid_iter = df[mask_validate].iloc[min_idx:max_idx]
+                x_valid_columns, x_validate, x_mappings = get_vectors(df_valid_iter, x_fields, x_mappings)
 
-                    x_validate = fix_np_nan(x_validate)
+                x_validate = fix_np_nan(x_validate)
 
-                    # print(x_validate)
-                    try:
-                        preds = clf.predict(x_validate)
-                    except TypeError as e:
-                        if "dense data is required" in str(e):
-                            x_validate = x_validate.toarray()
-                            use_sparse = False
-                            preds = clf.predict(x_validate)
-                            pass
-                    except DeprecationWarning as e:
-                        print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
-                        print(e)
-                        x_validate = x_validate.reshape(-1, 1)
-                        preds = clf.predict(x_validate)
-                        pass
+                # print(x_validate)
+                preds, x_validate = resilient_predict(clf, x_validate)
 
-                    calculate_probs = hasattr(clf, 'classes_') \
-                                      and hasattr(clf, 'predict_proba') \
-                                      and not (hasattr(clf, 'loss') and clf.loss == 'hinge')
-                    if calculate_probs:
-                        pred_probs = clf.predict_proba(x_validate)
-                        y_validate_probs.append(pred_probs)
-
-                    y_validate.append(preds)
-
-                # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
-                y_validate = np.hstack(y_validate).reshape(-1, 1)
-
-                global new_fields
-                new_fields = list()
+                calculate_probs = hasattr(clf, 'classes_') \
+                                  and hasattr(clf, 'predict_proba') \
+                                  and not (hasattr(clf, 'loss') and clf.loss == 'hinge')
                 if calculate_probs:
-                    y_validate_probs = np.vstack(y_validate_probs)
-                    print('ORIGINAL PROBABILITIES')
-                    print(*y_validate_probs[:10].round(4), sep='\n')
-                    print('ORIGINAL PROBABILITIES (NORMALIZED)')
-                    print(*[np.around(np.expm1(x), 4) for x in y_validate_probs][:10], sep='\n')
+                    pred_probs, x_validate = resilient_predict_probs(clf, x_validate)
+                    y_validate_probs.append(pred_probs)
 
-                    for y_name, m in y_mappings.items():
-                        df_probs = pd.DataFrame(data=y_validate_probs.round(4)
-                                                , columns=[y_name + '_prob_' + f.lower().replace(' ', '_') for f in
-                                                           list(m.classes_)[:y_validate_probs.shape[1]]]
-                                                , index=df_validate.index)
-                        # df_validate.reset_index(inplace=True, drop=True)
+                y_validate.append(preds)
 
-                        for name in df_probs.columns.values:
-                            if name in df_validate.columns.values:
-                                df_probs.rename(columns={name: name + '_final'}, inplace=True)
-                        df_validate = df_validate.join(df_probs, how='inner')
-                        # for col in df_probs.columns.values:
-                        #     df_validate[col] = df_probs[col]
-                    new_fields.extend(df_probs.columns.values.tolist())
+            # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
+            y_validate = np.hstack(y_validate).reshape(-1, 1)
 
-                for k, v in y_field.items():
-                    final_preds = y_mappings[k].inverse_transform(y_validate)
-                    print('FINAL PREDICTIONS')
-                    print(*final_preds[:10])
-                    y_pred_name = 'pred_' + k
-                    df_validate.loc[:, y_pred_name] = final_preds
-                    new_fields.extend([y_pred_name])
+            global new_fields
+            new_fields = list()
+            if calculate_probs:
+                y_validate_probs = np.vstack(y_validate_probs)
+                print('ORIGINAL PROBABILITIES')
+                print(*y_validate_probs[:10].round(4), sep='\n')
+                print('ORIGINAL PROBABILITIES (NORMALIZED)')
+                print(*[np.around(np.expm1(x), 4) for x in y_validate_probs][:10], sep='\n')
 
-                if predict_all:
-                    return_df = df_validate
-                else:
-                    return_df = df.loc[mask_validate == 0, :].append(df_validate, ignore_index=True)
+                for y_name, mapping in y_mappings.items():
+                    df_probs = pd.DataFrame(data=y_validate_probs.round(4)
+                                            , columns=[y_name + '_prob_' + f.lower().replace(' ', '_') for f in
+                                                       list(mapping.classes_)[:y_validate_probs.shape[1]]]
+                                            , index=df_validate.index)
+                    # df_validate.reset_index(inplace=True, drop=True)
 
-                yield return_df, mt
+                    for name in df_probs.columns.values:
+                        if name in df_validate.columns.values:
+                            df_probs.rename(columns={name: name + '_final'}, inplace=True)
+                    df_validate = df_validate.join(df_probs, how='inner')
+                    # for col in df_probs.columns.values:
+                    #     df_validate[col] = df_probs[col]
+                new_fields.extend(df_probs.columns.values.tolist())
+
+            for k, v in y_field.items():
+                final_preds = y_mappings[k].inverse_transform(y_validate)
+                print('FINAL PREDICTIONS')
+                print(*final_preds[:10])
+                y_pred_name = 'pred_' + k
+                df_validate.loc[:, y_pred_name] = final_preds
+                new_fields.extend([y_pred_name])
+
+            if predict_all:
+                return_df = df_validate
+            else:
+                return_df = df.loc[mask_validate == 0, :].append(df_validate, ignore_index=True)
+
+            yield return_df, model.model_class
+
+        else:
+            raise ValueError('Invalid value for "model_usage" field in model class: [{0}]'.format(model.model_usage))
 
         try:
             with open(predictive_model_file, 'wb') as pickle_file:
-                pickle.dump((clf,), pickle_file)
+                pickle.dump((model_type,), pickle_file)
         except AttributeError:
             pass
 
@@ -818,10 +860,70 @@ def predict(df: pd.DataFrame
             pickle.dump((x_mappings, y_mappings), pickle_file)
 
 
+def resilient_fit(obj, x, y):
+    global use_sparse
+    try:
+        obj.fit(x, y)
+    except TypeError as e:
+        if "dense data is required" in str(e):
+            x = x.toarray()
+            use_sparse = False
+            obj.fit(x, y)
+            pass
+    except DeprecationWarning as e:
+        print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
+        print(e)
+        x_train = x.reshape(-1, 1)
+        obj.fit(x_train, y)
+        pass
+
+    return obj, x
+
+
+def resilient_predict(obj, x):
+    global use_sparse
+    try:
+        preds = obj.predict(x)
+    except TypeError as e:
+        if "dense data is required" in str(e):
+            x = x.toarray()
+            use_sparse = False
+            preds = obj.predict(x)
+            pass
+    except DeprecationWarning as e:
+        print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
+        print(e)
+        x = x.reshape(-1, 1)
+        preds = obj.predict(x)
+        pass
+
+    return preds, x
+
+
+def resilient_predict_probs(obj, x):
+    global use_sparse
+    try:
+        preds = obj.predict_proba(x)
+    except TypeError as e:
+        if "dense data is required" in str(e):
+            x = x.toarray()
+            use_sparse = False
+            preds = obj.predict_proba(x)
+            pass
+    except DeprecationWarning as e:
+        print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
+        print(e)
+        x = x.reshape(-1, 1)
+        preds = obj.predict_proba(x)
+        pass
+
+    return preds, x
+
 
 def get_pred_field_names():
     global new_fields
     return new_fields
+
 
 def resilient_inverse_transform(model: sk_prep.LabelEncoder, preds: np.ndarray):
     try:
