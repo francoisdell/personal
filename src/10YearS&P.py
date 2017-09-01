@@ -428,7 +428,7 @@ def predict_recession(df: pd.DataFrame
                     , model_type=model_set
                     , report_name=report_name
                     , show_model_tests=True
-                    , retrain_model=True
+                    , retrain_model=False
                     , selection_limit=selection_limit
                     , predict_all=True
                     , verbose=verbose

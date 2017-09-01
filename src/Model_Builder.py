@@ -82,7 +82,7 @@ class ModelSet:
     #     model_list.extend([(v, 'final') for v in self.final_models])
     #     return model_list
 
-    def set_final_models(self, new_models):
+    def set_models(self, new_models):
         for old_model in self.final_models:
             for new_model in new_models.final_models:
                 if new_model.get_info() == old_model.get_info():
@@ -225,34 +225,32 @@ def predict(df: pd.DataFrame
     except (FileNotFoundError, ValueError) as e:
         print(e)
 
-        # CHANGE THE 'cat' to a list of all possible values in the y field. This is necessary because the LabelEncoder
-        # that will encode the Y variable values can't handle never-before-seen values. So we need to pass it every
-        # possible value in the Y variable, regardless of whether it appears in the train or test subsets.
-        for k, v in y_field.items():
-            if v == 'cat':
-                y_field[k] = df[k].unique().astype(str)
+    # CHANGE THE 'cat' to a list of all possible values in the y field. This is necessary because the LabelEncoder
+    # that will encode the Y variable values can't handle never-before-seen values. So we need to pass it every
+    # possible value in the Y variable, regardless of whether it appears in the train or test subsets.
+    for k, v in y_field.items():
+        if v == 'cat':
+            y_field[k] = df[k].unique().astype(str)
 
-        data_rows = len(mask_train)
-        y_mappings = train_models(df[mask_train], y_field)
-        _, y_train, y_mappings = get_vectors(df[mask_train], y_field, y_mappings, is_y=True)
+    data_rows = len(mask_train)
+    y_mappings = train_models(df[mask_train], y_field)
+    _, y_train, y_mappings = get_vectors(df[mask_train], y_field, y_mappings, is_y=True)
 
-        x_mappings = train_models(df[mask_train], x_fields)
+    x_mappings = train_models(df[mask_train], x_fields)
+    x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
+    x_train = fix_np_nan(x_train)
+
+    if selection_limit < 1.0:
+        print('Pruning x_fields for any variables with a p-value > {0}'.format(selection_limit))
+        scores, p_vals = sk_feat_sel.f_regression(x_train, y_train, center=False)
+        for x_field_name in list(x_fields.keys()):
+            xcol_indices = [idx for idx, vals in enumerate(x_columns) if vals[2] == x_field_name]
+            if all(p_vals[idx] > selection_limit or p_vals[idx] == np.nan for idx in xcol_indices):
+                x_fields.pop(x_field_name)
         x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
         x_train = fix_np_nan(x_train)
 
-        if selection_limit < 1.0:
-            print('Pruning x_fields for any variables with a p-value > {0}'.format(selection_limit))
-            scores, p_vals = sk_feat_sel.f_regression(x_train, y_train, center=False)
-            for x_field_name in list(x_fields.keys()):
-                xcol_indices = [idx for idx, vals in enumerate(x_columns) if vals[2] == x_field_name]
-                if all(p_vals[idx] > selection_limit or p_vals[idx] == np.nan for idx in xcol_indices):
-                    x_fields.pop(x_field_name)
-            x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
-            x_train = fix_np_nan(x_train)
-
     for idx, model in enumerate(model_type.get_models()):
-
-        mt = model.model_class
 
         # INITIAL AND FINAL MODELS: TRAIN ANY UNTRAINED MODELS
         # print(x_train.shape)
@@ -475,7 +473,8 @@ def predict(df: pd.DataFrame
                     else:
                         grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
 
-                    if (model.trained_model is not None) & (model.grid_param_dict == grid_param_dict):
+                    if (model.trained_model is not None) and \
+                            (np.testing.assert_equal(model.grid_param_dict, grid_param_dict) is None):
                         clf = model.trained_model
                     else:
 
