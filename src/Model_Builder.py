@@ -58,6 +58,7 @@ pd.options.mode.chained_assignment = None
 global use_sparse, verbose, s, new_fields
 use_sparse = True
 
+
 class ModelSet:
     def __init__(self,
                  final_models: Union[str, list],
@@ -93,12 +94,14 @@ class ModelSet:
     def __str__(self):
         return 'modelset_{0}stacked'.format(len(self.initial_models))
 
+
 class Model:
     def __init__(self,
                  model_class: str,
                  model_usage: str,
                  trained_model: object=None,
-                 grid_param_dict: dict=None):
+                 grid_param_dict: dict=None,
+                 x_columns: list=None):
 
         self.model_class = model_class
         self.model_usage = model_usage
@@ -111,6 +114,7 @@ class Model:
 
     def __str__(self):
         return self.model_class + '_' + self.model_usage
+
 
 def predict(df: pd.DataFrame
             , x_fields: dict
@@ -217,13 +221,20 @@ def predict(df: pd.DataFrame
             loaded_models, = pickle.load(pickle_file)
 
             # IF THERE ARE ANY PREEXISTING MODELS, USE THEM RATHER THAN RETRAINING THEM UNNECESSARILY
-            model_compare = [m1.get_info() == m2.get_info() for m1, m2 in zip(model_type.initial_models, loaded_models.initial_models)]
-            if all(model_compare):
-                model_type.set_final_models(loaded_models)
+            # model_compare = [m1.model_usage == m2.model_usage and
+            #                  m1.x_columns == m2.x_columns and
+            #                  m1.model_class == m2.model_class and
+            #                  np.testing.assert_equal(m1.grid_param_dict, m2.grid_param_dict)
+            #                  for m1, m2 in zip(model_type.initial_models, loaded_models.initial_models)]
+            # if model_compare:
+            # if all(model_compare):
+            #     model_type.set_final_models(loaded_models)
 
         print('Successfully loaded the mappings and predictive model.')
     except (FileNotFoundError, ValueError) as e:
         print(e)
+    else:
+        retrain_model = True
 
     # CHANGE THE 'cat' to a list of all possible values in the y field. This is necessary because the LabelEncoder
     # that will encode the Y variable values can't handle never-before-seen values. So we need to pass it every
@@ -344,7 +355,7 @@ def predict(df: pd.DataFrame
 
         global use_sparse
         if isinstance(clf, (GradientBoostingRegressor, GradientBoostingClassifier,
-                            KNeighborsClassifier, KNeighborsRegressor, SVR
+                            KNeighborsClassifier, KNeighborsRegressor, SVR, SVC
                             , MultiTaskLasso, LassoLars)):
             use_sparse = False
             if not isinstance(x_train, (np.ndarray)):
@@ -365,7 +376,8 @@ def predict(df: pd.DataFrame
         # print("NaN in x_train: %s" % np.isnan(x_train.data).any())
         # print("NaN in y_train: %s" % np.isnan(y_train.data).any())
 
-        print("\n----- Training Predictive Model [{0}] -----".format(model.model_class))
+        print("\n----- Training Predictive Model [type: {0}] [usage: {1}]-----"
+              .format(model.model_class, model.model_usage))
 
         if not model.is_custom:
             grid_param_dict = dict()
@@ -386,7 +398,7 @@ def predict(df: pd.DataFrame
                     # vals = [0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1]
                     vals = [1]
                 else:
-                    vals = [0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1]
+                    vals = [0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999]
                 # if hasattr(clf, 'learning_rate') and clf.learning_rate == 'optimal':
                 #     del vals[-1]
                 grid_param_dict['alpha'] = vals
@@ -473,8 +485,10 @@ def predict(df: pd.DataFrame
                     else:
                         grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
 
-                    if (model.trained_model is not None) and \
-                            (np.testing.assert_equal(model.grid_param_dict, grid_param_dict) is None):
+                    if retrain_model and \
+                            (model.trained_model is not None) and \
+                            (np.testing.assert_equal(model.grid_param_dict, grid_param_dict) is None) and \
+                            (model.x_columns == x_columns):
                         clf = model.trained_model
                     else:
 
@@ -487,6 +501,7 @@ def predict(df: pd.DataFrame
                         clf = grid.best_estimator_
                         model.trained_model = clf
                         model.grid_param_dict = grid_param_dict
+                        model.x_columns = x_columns
                     break
 
                 except (ValueError) as e:
@@ -496,11 +511,15 @@ def predict(df: pd.DataFrame
                     else:
                         raise e
         else:
-            if clf.get_params() == model.trained_model.get_params():
+            if retrain_model and \
+                    (model.trained_model is not None) and \
+                    (model.x_columns == x_columns) and \
+                    (clf.get_params() == model.trained_model.get_params()):
                 clf = model.trained_model
             else:
                 clf, x_train = resilient_fit(clf, x_train, y_train)
                 model.trained_model = clf
+                model.x_columns = x_columns
 
         print("------ Model Training Complete [{0}] ------\n".format(model.model_class))
 
@@ -863,8 +882,8 @@ def resilient_fit(obj, x, y) -> (object, object):
     global use_sparse
     try:
         obj.fit(x, y)
-    except TypeError as e:
-        if "dense data is required" in str(e):
+    except (TypeError, ValueError) as e:
+        if "dense data" in str(e):
             x = x.toarray()
             use_sparse = False
             obj.fit(x, y)
@@ -883,8 +902,8 @@ def resilient_predict(obj, x) -> (object, object):
     global use_sparse
     try:
         preds = obj.predict(x)
-    except TypeError as e:
-        if "dense data is required" in str(e):
+    except (TypeError, ValueError) as e:
+        if "dense data" in str(e):
             x = x.toarray()
             use_sparse = False
             preds = obj.predict(x)
@@ -903,8 +922,8 @@ def resilient_predict_probs(obj, x) -> (object, object):
     global use_sparse
     try:
         preds = obj.predict_proba(x)
-    except TypeError as e:
-        if "dense data is required" in str(e):
+    except (TypeError, ValueError) as e:
+        if "dense data" in str(e):
             x = x.toarray()
             use_sparse = False
             preds = obj.predict_proba(x)
