@@ -27,34 +27,44 @@ import io
 import requests
 import importlib
 
-rawdata_from_file = True
-finaldata_from_file = True
+# Specify whether the data will be loaded from pickle files or recollected fresh from the interwebz
+rawdata_from_file = True  # Whether to load the raw data (pre-transformations) from a pickle file
+finaldata_from_file = False  # Whether to load the final data (post-transformations) from a pickle file
+
+# Do you want to predict returns? Or Recessions?
+do_predict_returns = False
 returns_predict_years_forward = [9, 10]
-recession_predict_years_forward = [2, 3]
+do_predict_recessions = True
+recession_predict_years_forward = [2]
+
+# If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
 selection_limit = 5.0e-2
-train_pct = 0.8
+
+interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
+correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
+
+# DIMENSION REDUCTION. Recommend you use either PCA OR
+pca_components = 5  # Options: None (if you don't want PCA) or an integer stating the number of components you want
+max_var_correlation = None  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
+
+# Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
 end_dt = datetime.today().strftime('%Y-%m-%d')
-interaction_type = None  # Options: all, level_1, None
-correlation_type = 'level_1'  # Options: level_1, None
-use_pca = False
+train_pct = 0.8  # Defines the train/test split
 real = False
 sp_field_name = 'sp500'
 recession_field_name = 'recession_usa'
 verbose = False
-do_predict_returns = False
-do_predict_recessions = True
 fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
-ewm_halflife = 4.2655  # 4.2655 corresponds to a 0.125 weight
-default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster.
-
+ewm_halflife = 4.2655*2  # Halflife for EWM calculations. 4.2655 corresponds to a 0.125 weight.
+default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster, if less ideal.
 
 
 recession_models = [
-                   mb.ModelSet(final_models=['logit','pass_agg_c','nearest_centroid'],
-                                initial_models=['logit','pass_agg_c','nearest_centroid','gbc'])
-                    # mb.ModelSet(final_models=['ridge_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c'],
-                    #             initial_models=['pass_agg_c','gbc','svc','ridge_c','knn_c','bernoulli_nb','logit','nearest_centroid','etree_c'])
+                   # mb.ModelSet(final_models=['logit','pass_agg_c','nearest_centroid'],
+                   #              initial_models=['logit','pass_agg_c','nearest_centroid','gbc'])
+                    mb.ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c'],
+                                initial_models=['pass_agg_c','gbc','svc','knn_c','bernoulli_nb','logit','nearest_centroid','etree_c'])
                   # ,['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','gbc','pass_agg_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr:   ||  3yr:
@@ -428,7 +438,7 @@ def predict_recession(df: pd.DataFrame
                     , model_type=model_set
                     , report_name=report_name
                     , show_model_tests=True
-                    , retrain_model=True
+                    , retrain_model=False
                     , selection_limit=selection_limit
                     , predict_all=True
                     , verbose=verbose
@@ -703,6 +713,46 @@ def get_all_interactions(new_names: list, curr_name: str=None, series: pd.Series
         get_all_interactions(new_names=new_names[1:])
 
 
+def corr_df(x, x_values, max_corr_val):
+    '''
+    Obj: Drops features that are strongly correlated to other features.
+          This lowers model complexity, and aids in generalizing the model.
+    Inputs:
+          df: features df (x)
+          corr_val: Columns are dropped relative to the corr_val input (e.g. 0.8)
+    Output: df that only includes uncorrelated features
+    '''
+
+    # Creates Correlation Matrix and Instantiates
+    corr_matrix = x.loc[x_values,:].corr()
+    # iters = range(len(corr_matrix.columns) - 1)
+    drop_cols = []
+
+    # Iterates through Correlation Matrix Table to find correlated columns
+    # for i in iters:
+    for i in x_values:
+        for j in range(i):
+            item = corr_matrix.iloc[j:(j+1), (i+1):(i+2)]
+            col = item.columns
+            row = item.index
+            val = item.values
+            if val >= max_corr_val:
+                # Prints the correlated feature set and the corr val
+                print(col.values[0], "|", row.values[0], "|", round(val[0][0], 2))
+                drop_cols.append(i)
+
+    x_values = [v for v in x_values if v not in drop_cols]
+    return x_values
+    # drops = sorted(set(drop_cols))[::-1]
+
+    # Drops the correlated columns
+    # for i in drops:
+    #     col = x.iloc[:, (i+1):(i+2)].columns.values
+    #     df = x.drop(col, axis=1)
+
+    # return df
+
+
 def trim_outliers(y: pd.Series, thresh=4):
     # warning: this function does not check for NAs
     # nor does it address issues when
@@ -755,9 +805,9 @@ def calc_equity_alloc() -> pd.Series:
     return make_qtrly(equity_alloc, 'last')
 
 
-def convert_to_pca(pca_df: pd.DataFrame, field_names: list):
+def convert_to_pca(pca_df: pd.DataFrame, field_names: list, num_components):
     from sklearn.decomposition import TruncatedSVD
-    pca_model = TruncatedSVD(n_components=4, random_state=555)
+    pca_model = TruncatedSVD(n_components=num_components, random_state=555)
 
     x_results = pca_model.fit_transform(pca_df.loc[:, field_names]).T
     print(pca_model.components_)
@@ -829,6 +879,8 @@ data_sources['tax_receipts_corp'] = data_source('FCTAX', 'fred')
 data_sources['tax_receipts_tot'] = data_source('W006RC1Q027SBEA', 'fred')
 data_sources['nonfin_equity'] = data_source('MVEONWMVBSNNCB', 'fred')
 data_sources['nonfin_networth'] = data_source('TNWMVBSNNCB', 'fred')
+data_sources['nonfin_pretax_profit'] = data_source('NFCPATAX', 'fred')
+
 data_sources['recession_usa'] = data_source('USREC', 'fred')
 ds_names = [k for k in data_sources.keys()]
 
@@ -900,36 +952,42 @@ except Exception as e:
     df['tsy_10yr_minus_fed_funds_rate'] = df['tsy_10yr_yield'] - df['fed_funds_rate']
     df['tsy_3m10y_curve'] = df['tsy_3mo_yield'] / df['tsy_10yr_yield']
     df['tobin_q'] = [math.sqrt(x * y) for x, y in df.loc[:,['nonfin_equity','nonfin_networth']].values]  # geom mean
+    df['corp_profit_margins'] = df['nonfin_pretax_profit'] / df['gdp_nom']
+
+
 
     if do_predict_returns:
         # FULL LIST FOR LINEAR REGRESSION
-        # x_names = [
-        #     'equity_alloc'
-        #     , 'tsy_10yr_yield'
-        #     , 'tsy_5yr_yield'
-        #     , 'tsy_3mo_yield'
-        #     , 'cape'
-        #     # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
-        #     , 'unempl_rate'
-        #     , 'empl_construction'
-        #     , 'sp500_peratio'
-        #     , 'capacity_util_mfg'
-        #     , 'capacity_util_chem'
-        #     # , 'gold_fix_3pm'
-        #     # , 'fed_funds_rate'
-        #     , 'tsy_3m10y_curve'
-        #     , 'industrial_prod'
-        #     # , 'tsy_10yr_minus_fed_funds_rate'
-        #     # , 'tsy_10yr_minus_cpi'
-        #     # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
-        #     # , 'gdp_nom'
-        #     # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
-        #     # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
-        #     # , 'tsy_30yr_yield' # Not much history
-        #     , 'med_family_income_vs_house_price'
-        #     # , 'pers_savings_rt'
-        #     ]
+        x_names = [
+            'equity_alloc'
+            , 'tsy_10yr_yield'
+            , 'tsy_5yr_yield'
+            , 'tsy_3mo_yield'
+            , 'cape'
+            , 'tobin_q'
+            # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
+            , 'unempl_rate'
+            , 'empl_construction'
+            , 'sp500_peratio'
+            , 'capacity_util_mfg'
+            , 'capacity_util_chem'
+            # , 'gold_fix_3pm'
+            # , 'fed_funds_rate'
+            , 'tsy_3m10y_curve'
+            , 'industrial_prod'
+            , 'tsy_10yr_minus_fed_funds_rate'
+            , 'tsy_10yr_minus_cpi'
+            # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
+            # , 'gdp_nom'
+            # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
+            # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
+            # , 'tsy_30yr_yield' # Not much history
+            , 'med_family_income_vs_house_price'
+            , 'pers_savings_rt'
+            , 'corp_profit_margins'
 
+            ]
+        """
         x_names = [
             'equity_alloc'
             # , 'tsy_10yr_yield'
@@ -956,7 +1014,9 @@ except Exception as e:
             # , 'tsy_30yr_yield' # Not much history
             , 'med_family_income_vs_house_price'
             # , 'pers_savings_rt'
+            # , 'corp_profit_margins'
             ]
+        """
 
     else:
         x_names = [
@@ -985,7 +1045,8 @@ except Exception as e:
             # , 'tsy_30yr_yield' # Not much history
             , 'med_family_income_vs_house_price'
             , 'pers_savings_rt'
-            ]
+            , 'corp_profit_margins'
+        ]
 
     empty_cols = [c for c in df.columns.values if all(df[c].isnull())]
     if len(empty_cols) > 0:
@@ -1015,6 +1076,9 @@ except Exception as e:
         , 'med_house_price'
         , 'med_family_income'
         , 'unempl_rate'
+        , 'industrial_prod'
+        , 'tsy_10yr_minus_fed_funds_rate'
+        , 'tsy_10yr_minus_cpi'
         , 'real_med_family_income'
         , 'combanks_business_loans'
         , 'combanks_assets_tot'
@@ -1026,6 +1090,7 @@ except Exception as e:
         , 'tax_receipts_corp'
         , 'fed_funds_rate'
         , 'gold_fix_3pm'
+        , 'corp_profit_margins'
     ]
 
     # Interactions between a field and its previous values
@@ -1039,8 +1104,8 @@ except Exception as e:
     df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
 
     # UNCOMMENT IF YOU WANT TO UTILIZE PCA
-    if use_pca:
-        x_names = convert_to_pca(df, x_names)
+    if pca_components:
+        x_names = convert_to_pca(df, x_names, num_components=pca_components)
 
     # Perform the addition of the interaction terms
     corr_x_names = None
@@ -1099,6 +1164,14 @@ except Exception as e:
     sp500_qtr_since_last_corr = 'sp500_qtr_since_last_corr'
     df[sp500_qtr_since_last_corr] = time_since_last_true(df[new_x_names[-1]])
     x_names.append(sp500_qtr_since_last_corr)
+
+
+    ##########################################################################################################
+    # Finally, remove any highly correlated items from the regression, to reduce issues with the model
+    ##########################################################################################################
+    if max_var_correlation:
+        x_names = corr_df(df, x_values=x_names, max_corr_val=max_var_correlation)
+
 # print('===== Head =====\n', df.head(5))
 # print('===== Tail =====\n', df.tail(5))
 
