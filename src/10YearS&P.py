@@ -17,6 +17,7 @@ from statsmodels import robust
 from fredapi import Fred
 from matplotlib import pyplot as plt
 from matplotlib.ticker import OldScalarFormatter
+from sklearn.decomposition import TruncatedSVD
 from inspect import isfunction
 from pandas.compat import StringIO
 import requests_cache
@@ -44,7 +45,7 @@ interaction_type = 'level_1'  # Specify whether to derive pairwise interaction v
 correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
 
 # DIMENSION REDUCTION. Recommend you use either PCA OR
-pca_variance = 0.9  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
+pca_variance = 0.95  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
 max_var_correlation = None  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
 
 # Variables specifying what kinds of predictions to run, and for what time period
@@ -62,8 +63,9 @@ default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is gene
 recession_models = [
                    # mb.ModelSet(final_models=['logit','pass_agg_c','nearest_centroid'],
                    #              initial_models=['logit','pass_agg_c','nearest_centroid','gbc'])
-                    mb.ModelSet(final_models=['gauss_proc_c','neural_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','nu_svc'],
-                                initial_models=['gauss_proc_c','neural_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','nu_svc'])
+                    # 'gauss_proc_c'
+                    mb.ModelSet(final_models=['neural_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c'],
+                                initial_models=['neural_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c'])
                   # ,['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','gbc','pass_agg_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr:   ||  3yr:
@@ -442,7 +444,8 @@ def predict_recession(df: pd.DataFrame
                     , predict_all=True
                     , verbose=verbose
                     , train_pct=train_pct
-                    , random_train_test=False):
+                    , random_train_test=False
+                    ,pca_explained_var=1.0):
 
         forward_y_field_name_pred = 'pred_' + forward_y_field_name
         #################################
@@ -722,6 +725,7 @@ def corr_df(x, x_values, max_corr_val):
     Output: df that only includes uncorrelated features
     '''
 
+    print('Removing one variable for each pair of variables with correlation greater than [{0}]'.format(max_corr_val))
     # Creates Correlation Matrix and Instantiates
     corr_matrix = x.loc[x_values,:].corr()
     # iters = range(len(corr_matrix.columns) - 1)
@@ -805,12 +809,13 @@ def calc_equity_alloc() -> pd.Series:
 
 
 def convert_to_pca(pca_df: pd.DataFrame, field_names: list, explained_variance: float=0.95):
-    from sklearn.decomposition import TruncatedSVD
+    print("Conducting PCA and pruning components above the desired explained variance ratio")
     max_components = len(field_names) - 1
     pca_model = TruncatedSVD(n_components=max_components, random_state=555)
 
     x_results = pca_model.fit_transform(pca_df.loc[:, field_names]).T
-    print(pca_model.components_)
+    # print(pca_model.components_)
+    print('PCA explained variance ratios.')
     print(pca_model.explained_variance_ratio_)
 
     x_names_pca = []
@@ -1112,10 +1117,11 @@ except Exception as e:
 
     # Perform the addition of the interaction terms
     corr_x_names = None
+    print('Creating correlation interaction terms [{0}]'.format(correlation_type))
     if correlation_type == 'level_1':
         df, corr_x_names = get_level1_correlations(df=df, x_names=x_names)
 
-    print('Adding new terms.')
+    print('Creating direct interaction terms [{0}]'.format(interaction_type))
     if interaction_type == 'all':
         new_x_names = []
         get_all_interactions(x_names)
@@ -1124,7 +1130,6 @@ except Exception as e:
     elif interaction_type == 'level_1':
         df, inter_x_names = get_level1_interactions(df=df, x_names=x_names)
         x_names.extend(inter_x_names)
-
 
 
     print('Converting fields to EWMA fields.')
@@ -1149,6 +1154,7 @@ except Exception as e:
     df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
 
     # Generate all possible combinations of the imput variables.
+    print('Creating squared and square root varieties of predictor variables')
     operations = [('pow2', math.pow, (2,)), ('sqrt', math.sqrt, None)]
     for v in x_names.copy():
         for suffix, op, var in operations:
@@ -1161,9 +1167,9 @@ except Exception as e:
         # IMPUTE VALUES!!!
         df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
 
+    print('Deriving special predictor variables.')
     df, new_x_names = get_diff_std_and_flags(df, 'sp500')
     # x_names.extend(new_x_names)
-
     sp500_qtr_since_last_corr = 'sp500_qtr_since_last_corr'
     df[sp500_qtr_since_last_corr] = time_since_last_true(df[new_x_names[-1]])
     x_names.append(sp500_qtr_since_last_corr)
@@ -1184,6 +1190,7 @@ except Exception as e:
 # df_valid = df.loc[~train_mask, :]
 # predict_years_forward = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
+print('Dumping final dataset (post-transformations) to pickle file [{0}]'.format(final_data_file))
 with open(final_data_file, 'wb') as f:
     pickle.dump((df, x_names), f)
 

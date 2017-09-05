@@ -32,6 +32,7 @@ import sklearn.feature_extraction.text as sk_text
 import sklearn.preprocessing as sk_prep
 from sklearn import feature_extraction as sk_feat
 from sklearn import feature_selection as sk_feat_sel
+from sklearn.decomposition import TruncatedSVD
 from sklearn.neural_network import MLPClassifier, MLPRegressor, BernoulliRBM
 from sklearn.gaussian_process import GaussianProcessClassifier, GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, Matern, RationalQuadratic, ExpSineSquared, ConstantKernel, WhiteKernel
@@ -131,6 +132,7 @@ def predict(df: pd.DataFrame
             , train_pct: float=0.7
             , random_train_test: bool=True
             , max_train_size: int=50000
+            , pca_explained_var: float=1.0
             ) -> pd.DataFrame:
 
     global s
@@ -390,11 +392,15 @@ def predict(df: pd.DataFrame
 
             # SOLVER
             if 'solver' in clf.get_params().keys():
-                grid_param_dict['solver'] = ['libfgs','sgd','adam']
+                if isinstance(clf, (MLPRegressor, MLPClassifier)):
+                    grid_param_dict['solver'] = ['lbfgs','adam']  # 'sgd' tends to crash the system when used parallel
+                # elif isinstance(clf, (LogisticRegression)):
+                #     grid_param_dict['solver'] = ['liblinear', 'newton-cg', 'lbfgs', 'sag', 'saga']
 
             # ACTIVATION
             if 'activation' in clf.get_params().keys():
-                grid_param_dict['activation'] = ['identity','logistic','tanh','relu']
+                # recommend against using 'logistic' for the activation. Just use a logistic regression instead.
+                grid_param_dict['activation'] = ['identity','relu']  #tanh tends to crash the system w/ parallel
 
             # CLASS_WEIGHT
             if 'class_weight' in clf.get_params().keys():
@@ -497,7 +503,7 @@ def predict(df: pd.DataFrame
             while True:
                 try:
                     # grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
-                    if 'windows' in platform.system().lower():
+                    if 'windows' in platform.system().lower():  # or isinstance(clf,(MLPClassifier, MLPRegressor)):
                         grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict)
                     else:
                         grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
@@ -617,6 +623,10 @@ def predict(df: pd.DataFrame
         # FINAL MODELS ONLY: RUN THE MODEL ON THE VALIDATION SET TO GENERATE PREDICTIONS
         elif model.model_usage == 'final':
 
+            # If PCA has been specified, convert x_fields to PCA
+            if pca_explained_var < 1:
+                df, x_columns = convert_to_pca(pca_df=df, field_names=list(x_fields.keys()), explained_variance=pca_explained_var)
+
             # INITIAL AND FINAL MODELS: SHOW MODEL TESTS
             if show_model_tests:
                 print("--------------------------\n"
@@ -694,15 +704,17 @@ def predict(df: pd.DataFrame
                             # print('==== P-Values ====\n', p_vals[nonzero_coefs_mask])
 
                         if len(coefs) > 0:
-                            coefs = ['coefs'] + [v for v in coefs]
-                            coef_list.append(coefs)
+                            try:
+                                coefs = ['coefs'] + [v for v in coefs]
+                                coef_list.append(coefs)
 
-                            expit_coefs = ['coef_expit'] + [expit(float(v)) for v in coefs[1:]]
-                            coef_list.append(expit_coefs)
+                                expit_coefs = ['coef_expit'] + [expit(float(v)) for v in coefs[1:]]
+                                coef_list.append(expit_coefs)
 
-                            exp_coefs = ['coef_exp'] + ['%f' % exp(float(v)) for v in coefs[1:]]
-                            coef_list.append(exp_coefs)
-
+                                exp_coefs = ['coef_exp'] + ['%f' % exp(float(v)) for v in coefs[1:]]
+                                coef_list.append(exp_coefs)
+                            except OverflowError:
+                                pass
                     except ValueError as e:
                         print(e)
                         pass
@@ -895,6 +907,29 @@ def predict(df: pd.DataFrame
             pickle.dump((x_mappings, y_mappings), pickle_file)
 
 
+def convert_to_pca(pca_df: pd.DataFrame,
+                   field_names: list,
+                   explained_variance: float
+                   ) -> (pd.DataFrame, list):
+    print("Conducting PCA and pruning components above the desired explained variance ratio")
+    max_components = len(field_names) - 1
+    pca_model = TruncatedSVD(n_components=max_components, random_state=555)
+
+    x_results = pca_model.fit_transform(pca_df.loc[:, field_names]).T
+    print(pca_model.components_)
+    print(pca_model.explained_variance_ratio_)
+
+    x_names_pca = []
+    sum_variance = 0
+    for idx, var in enumerate(pca_model.explained_variance_ratio_):
+        sum_variance += var
+        pca_name = 'pca_{0}'.format(idx)
+        pca_df[pca_name] = x_results[idx]
+        x_names_pca.append(pca_name)
+        if sum_variance > explained_variance:
+            break
+    return pca_df, x_names_pca
+
 def resilient_fit(obj, x, y) -> (object, object):
     global use_sparse
     try:
@@ -905,7 +940,8 @@ def resilient_fit(obj, x, y) -> (object, object):
             use_sparse = False
             obj.fit(x, y)
             pass
-        raise
+        else:
+            raise
     except DeprecationWarning as e:
         print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
         print(e)
@@ -926,7 +962,8 @@ def resilient_predict(obj, x) -> (object, object):
             use_sparse = False
             preds = obj.predict(x)
             pass
-        raise
+        else:
+            raise
     except DeprecationWarning as e:
         print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
         print(e)
@@ -947,7 +984,8 @@ def resilient_predict_probs(obj, x) -> (object, object):
             use_sparse = False
             preds = obj.predict_proba(x)
             pass
-        raise
+        else:
+            raise
     except DeprecationWarning as e:
         print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
         print(e)
