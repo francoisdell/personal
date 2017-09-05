@@ -45,8 +45,8 @@ interaction_type = 'level_1'  # Specify whether to derive pairwise interaction v
 correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
 
 # DIMENSION REDUCTION. Recommend you use either PCA OR
-pca_variance = 0.95  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
-max_var_correlation = None  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
+pca_variance = None  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
+max_var_correlation = 0.8  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -65,7 +65,7 @@ recession_models = [
                    #              initial_models=['logit','pass_agg_c','nearest_centroid','gbc'])
                     # 'gauss_proc_c'
                     mb.ModelSet(final_models=['neural_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c'],
-                                initial_models=['neural_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c'])
+                                initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','bernoulli_nb'])
                   # ,['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','gbc','pass_agg_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr:   ||  3yr:
@@ -715,7 +715,7 @@ def get_all_interactions(new_names: list, curr_name: str=None, series: pd.Series
         get_all_interactions(new_names=new_names[1:])
 
 
-def corr_df(x, x_values, max_corr_val):
+def remove_correlated(df: pd.DataFrame, x_fields: list, max_corr_val: float):
     '''
     Obj: Drops features that are strongly correlated to other features.
           This lowers model complexity, and aids in generalizing the model.
@@ -727,13 +727,13 @@ def corr_df(x, x_values, max_corr_val):
 
     print('Removing one variable for each pair of variables with correlation greater than [{0}]'.format(max_corr_val))
     # Creates Correlation Matrix and Instantiates
-    corr_matrix = x.loc[x_values,:].corr()
-    # iters = range(len(corr_matrix.columns) - 1)
+    corr_matrix = df.loc[:, x_fields].corr()
+    iters = range(len(corr_matrix.columns) - 1)
     drop_cols = []
 
     # Iterates through Correlation Matrix Table to find correlated columns
     # for i in iters:
-    for i in x_values:
+    for i, v in enumerate(x_fields):
         for j in range(i):
             item = corr_matrix.iloc[j:(j+1), (i+1):(i+2)]
             col = item.columns
@@ -742,10 +742,10 @@ def corr_df(x, x_values, max_corr_val):
             if val >= max_corr_val:
                 # Prints the correlated feature set and the corr val
                 print(col.values[0], "|", row.values[0], "|", round(val[0][0], 2))
-                drop_cols.append(i)
+                drop_cols.append(v)
 
-    x_values = [v for v in x_values if v not in drop_cols]
-    return x_values
+    return_x_vals = [v for v in x_fields if v not in drop_cols]
+    return return_x_vals
     # drops = sorted(set(drop_cols))[::-1]
 
     # Drops the correlated columns
@@ -893,6 +893,7 @@ data_sources['recession_usa'] = data_source('USREC', 'fred')
 ds_names = [k for k in data_sources.keys()]
 
 raw_data_file = 'sp500_hist.p'
+resave_data = False
 try:
     if rawdata_from_file:
         with open(raw_data_file, 'rb') as f:
@@ -906,21 +907,22 @@ try:
                     print('New data source added: [{0}]'.format(k))
                     data_sources_temp[k] = data_sources[k]
         data_sources = data_sources_temp
-        for k, ds in data_sources.items():
-            if len(ds.data) == 0:  # check if data is empty (e.g. if index has a length of 0)
-                ds.collect_data()
-            data_sources[k] = ds
+
 
     else:
         raise ValueError('Per Settings, Reloading Data From Yahoo Finance/FRED/Everything Else.')
 except Exception as e:
     print(e)
-    for k, ds in data_sources.items():
-        ds.collect_data()
-        data_sources[k] = ds
 
-with open(raw_data_file, 'wb') as f:
-    pickle.dump((data_sources,), f)
+for k, ds in data_sources.items():
+    if len(ds.data) == 0:  # check if data is empty (e.g. if index has a length of 0)
+        ds.collect_data()
+        resave_data = True
+    data_sources[k] = ds
+
+if resave_data:
+    with open(raw_data_file, 'wb') as f:
+        pickle.dump((data_sources,), f)
 
     # modified_z_score = 0.6745 * abs_dev / y_mad
     # modified_z_score[y == m] = 0
@@ -1112,7 +1114,7 @@ except Exception as e:
     df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
 
     # UNCOMMENT IF YOU WANT TO UTILIZE PCA
-    if pca_variance:
+    if pca_variance and pca_variance < 1:
         x_names = convert_to_pca(df, x_names, explained_variance=pca_variance)
 
     # Perform the addition of the interaction terms
@@ -1156,11 +1158,13 @@ except Exception as e:
     # Generate all possible combinations of the imput variables.
     print('Creating squared and square root varieties of predictor variables')
     operations = [('pow2', math.pow, (2,)), ('sqrt', math.sqrt, None)]
-    for v in x_names.copy():
+    new_x_names = []
+    for v in x_names:
         for suffix, op, var in operations:
             new_x_name = '{0}_{1}'.format(v, suffix)
             df[new_x_name] = df[v].abs().apply(op, args=var) * df[v].apply(lambda x: -1 if x < 0 else 1)
-            x_names.append(new_x_name)
+            new_x_names.append(new_x_name)
+    x_names.extend(new_x_names)
 
     if corr_x_names:
         x_names.extend(corr_x_names)
@@ -1178,8 +1182,11 @@ except Exception as e:
     ##########################################################################################################
     # Finally, remove any highly correlated items from the regression, to reduce issues with the model
     ##########################################################################################################
-    if max_var_correlation:
-        x_names = corr_df(df, x_values=x_names, max_corr_val=max_var_correlation)
+    if max_var_correlation and max_var_correlation < 1:
+        for v in x_names:
+            if isinstance(v, (list, tuple)):
+                print('This is fucked up: [{0}]'.format(v))
+        x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
 
 # print('===== Head =====\n', df.head(5))
 # print('===== Tail =====\n', df.tail(5))

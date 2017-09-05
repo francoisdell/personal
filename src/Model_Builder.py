@@ -393,7 +393,7 @@ def predict(df: pd.DataFrame
             # SOLVER
             if 'solver' in clf.get_params().keys():
                 if isinstance(clf, (MLPRegressor, MLPClassifier)):
-                    grid_param_dict['solver'] = ['lbfgs','adam']  # 'sgd' tends to crash the system when used parallel
+                    grid_param_dict['solver'] = ['adam']  # 'sgd' tends to crash the system when used parallel. lbfgs
                 # elif isinstance(clf, (LogisticRegression)):
                 #     grid_param_dict['solver'] = ['liblinear', 'newton-cg', 'lbfgs', 'sag', 'saga']
 
@@ -504,9 +504,9 @@ def predict(df: pd.DataFrame
                 try:
                     # grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
                     if 'windows' in platform.system().lower():  # or isinstance(clf,(MLPClassifier, MLPRegressor)):
-                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict)
+                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=5)
                     else:
-                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
+                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=5, n_jobs=-1)
 
                     if retrain_model and \
                             (model.trained_model is not None) and \
