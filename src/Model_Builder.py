@@ -33,6 +33,8 @@ import sklearn.preprocessing as sk_prep
 from sklearn import feature_extraction as sk_feat
 from sklearn import feature_selection as sk_feat_sel
 from sklearn.neural_network import MLPClassifier, MLPRegressor, BernoulliRBM
+from sklearn.gaussian_process import GaussianProcessClassifier, GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF, Matern, RationalQuadratic, ExpSineSquared, ConstantKernel, WhiteKernel
 from sklearn.model_selection import GridSearchCV
 from sklearn.linear_model import SGDClassifier, SGDRegressor, PassiveAggressiveClassifier, PassiveAggressiveRegressor
 from sklearn.linear_model import Lasso, Ridge, ElasticNet, MultiTaskLasso, OrthogonalMatchingPursuit
@@ -294,6 +296,10 @@ def predict(df: pd.DataFrame
                 clf = RidgeClassifier()
             elif model.model_class == 'lars':
                 clf = Lars()
+            elif model.model_class == 'gauss_proc_c':
+                clf = GaussianProcessClassifier(RBF(1.0))
+            elif model.model_class == 'gauss_proc_r':
+                clf = GaussianProcessRegressor(RBF(1.0))
             elif model.model_class == 'lasso':
                 clf = Lasso()
             elif model.model_class == 'lasso_lars':
@@ -382,6 +388,14 @@ def predict(df: pd.DataFrame
         if not model.is_custom:
             grid_param_dict = dict()
 
+            # SOLVER
+            if 'solver' in clf.get_params().keys():
+                grid_param_dict['solver'] = ['libfgs','sgd','adam']
+
+            # ACTIVATION
+            if 'activation' in clf.get_params().keys():
+                grid_param_dict['activation'] = ['identity','logistic','tanh','relu']
+
             # CLASS_WEIGHT
             if 'class_weight' in clf.get_params().keys():
                 clf.class_weight = 'balanced'
@@ -457,7 +471,10 @@ def predict(df: pd.DataFrame
 
             # KERNELS
             if 'kernel' in clf.get_params().keys():
-                if isinstance(clf, (SVC, SVR)):
+                if isinstance(clf, (GaussianProcessRegressor, GaussianProcessClassifier)):
+                    grid_param_dict['kernel'] = [RBF(), RationalQuadratic(), ExpSineSquared(), WhiteKernel()
+                        , ConstantKernel()]
+                elif isinstance(clf, (SVC, SVR)):
                     grid_param_dict['kernel'] = ['linear','poly','rbf','sigmoid']  # LINEAR IS 'Work in progress.' as of 0.19
                 else:
                     print('Unspecified parameter "kernel" for ', type(clf))
