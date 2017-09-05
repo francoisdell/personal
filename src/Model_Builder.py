@@ -472,7 +472,7 @@ def predict(df: pd.DataFrame
             # KERNELS
             if 'kernel' in clf.get_params().keys():
                 if isinstance(clf, (GaussianProcessRegressor, GaussianProcessClassifier)):
-                    grid_param_dict['kernel'] = [RBF(), RationalQuadratic(), ExpSineSquared(), WhiteKernel()
+                    grid_param_dict['kernel'] = [RBF(), RationalQuadratic(), WhiteKernel()
                         , ConstantKernel()]
                 elif isinstance(clf, (SVC, SVR)):
                     grid_param_dict['kernel'] = ['linear','poly','rbf','sigmoid']  # LINEAR IS 'Work in progress.' as of 0.19
@@ -900,11 +900,12 @@ def resilient_fit(obj, x, y) -> (object, object):
     try:
         obj.fit(x, y)
     except (TypeError, ValueError) as e:
-        if "dense data" in str(e):
+        if "dense" in str(e):
             x = x.toarray()
             use_sparse = False
             obj.fit(x, y)
             pass
+        raise
     except DeprecationWarning as e:
         print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
         print(e)
@@ -920,11 +921,12 @@ def resilient_predict(obj, x) -> (object, object):
     try:
         preds = obj.predict(x)
     except (TypeError, ValueError) as e:
-        if "dense data" in str(e):
+        if "dense" in str(e):
             x = x.toarray()
             use_sparse = False
             preds = obj.predict(x)
             pass
+        raise
     except DeprecationWarning as e:
         print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
         print(e)
@@ -940,11 +942,12 @@ def resilient_predict_probs(obj, x) -> (object, object):
     try:
         preds = obj.predict_proba(x)
     except (TypeError, ValueError) as e:
-        if "dense data" in str(e):
+        if "dense" in str(e):
             x = x.toarray()
             use_sparse = False
             preds = obj.predict_proba(x)
             pass
+        raise
     except DeprecationWarning as e:
         print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
         print(e)
