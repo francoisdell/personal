@@ -741,7 +741,7 @@ def remove_correlated(df: pd.DataFrame, x_fields: list, max_corr_val: float):
             val = item.values
             if val >= max_corr_val:
                 # Prints the correlated feature set and the corr val
-                print(col.values[0], "|", row.values[0], "|", round(val[0][0], 2))
+                # print(col.values[0], "|", row.values[0], "|", round(val[0][0], 2))
                 drop_cols.append(v)
 
     return_x_vals = [v for v in x_fields if v not in drop_cols]
