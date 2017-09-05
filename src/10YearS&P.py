@@ -44,7 +44,7 @@ interaction_type = 'level_1'  # Specify whether to derive pairwise interaction v
 correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
 
 # DIMENSION REDUCTION. Recommend you use either PCA OR
-pca_components = 5  # Options: None (if you don't want PCA) or an integer stating the number of components you want
+pca_variance = 0.9  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
 max_var_correlation = None  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
 
 # Variables specifying what kinds of predictions to run, and for what time period
@@ -59,12 +59,11 @@ fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
 ewm_halflife = 4.2655*2  # Halflife for EWM calculations. 4.2655 corresponds to a 0.125 weight.
 default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster, if less ideal.
 
-
 recession_models = [
                    # mb.ModelSet(final_models=['logit','pass_agg_c','nearest_centroid'],
                    #              initial_models=['logit','pass_agg_c','nearest_centroid','gbc'])
-                    mb.ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c'],
-                                initial_models=['pass_agg_c','gbc','svc','knn_c','bernoulli_nb','logit','nearest_centroid','etree_c'])
+                    mb.ModelSet(final_models=['neural_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','nu_svc'],
+                                initial_models=['neural_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c'])
                   # ,['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','gbc','pass_agg_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr:   ||  3yr:
@@ -805,20 +804,24 @@ def calc_equity_alloc() -> pd.Series:
     return make_qtrly(equity_alloc, 'last')
 
 
-def convert_to_pca(pca_df: pd.DataFrame, field_names: list, num_components):
+def convert_to_pca(pca_df: pd.DataFrame, field_names: list, explained_variance: float=0.95):
     from sklearn.decomposition import TruncatedSVD
-    pca_model = TruncatedSVD(n_components=num_components, random_state=555)
+    max_components = len(field_names) - 1
+    pca_model = TruncatedSVD(n_components=max_components, random_state=555)
 
     x_results = pca_model.fit_transform(pca_df.loc[:, field_names]).T
     print(pca_model.components_)
     print(pca_model.explained_variance_ratio_)
 
     x_names_pca = []
-    for idx, component in enumerate(x_results):
+    sum_variance = 0
+    for idx, var in enumerate(pca_model.explained_variance_ratio_):
+        sum_variance += var
         pca_name = 'pca_{0}'.format(idx)
-        pca_df[pca_name] = component
+        pca_df[pca_name] = x_results[idx]
         x_names_pca.append(pca_name)
-
+        if sum_variance > explained_variance:
+            break
     return x_names_pca
 
 
@@ -1104,8 +1107,8 @@ except Exception as e:
     df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
 
     # UNCOMMENT IF YOU WANT TO UTILIZE PCA
-    if pca_components:
-        x_names = convert_to_pca(df, x_names, num_components=pca_components)
+    if pca_variance:
+        x_names = convert_to_pca(df, x_names, explained_variance=pca_variance)
 
     # Perform the addition of the interaction terms
     corr_x_names = None
@@ -1147,8 +1150,8 @@ except Exception as e:
 
     # Generate all possible combinations of the imput variables.
     operations = [('pow2', math.pow, (2,)), ('sqrt', math.sqrt, None)]
-    for suffix, op, var in operations:
-        for v in x_names.copy():
+    for v in x_names.copy():
+        for suffix, op, var in operations:
             new_x_name = '{0}_{1}'.format(v, suffix)
             df[new_x_name] = df[v].abs().apply(op, args=var) * df[v].apply(lambda x: -1 if x < 0 else 1)
             x_names.append(new_x_name)

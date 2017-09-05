@@ -393,12 +393,12 @@ def predict(df: pd.DataFrame
             # ALPHAS
             if 'alpha' in clf.get_params().keys():
                 if isinstance(clf, (GradientBoostingRegressor)):
-                    vals = [0.0001, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999, 0.9999]
+                    vals = [1e-10, 0.0001, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999, 0.9999, 1-1e-10]
                 elif isinstance(clf, (RidgeClassifier)):
                     # vals = [0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1]
                     vals = [1]
                 else:
-                    vals = [0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999]
+                    vals = [1e-10, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999, 1-1e-10]
                 # if hasattr(clf, 'learning_rate') and clf.learning_rate == 'optimal':
                 #     del vals[-1]
                 grid_param_dict['alpha'] = vals
@@ -464,7 +464,7 @@ def predict(df: pd.DataFrame
 
             # NU
             if 'nu' in clf.get_params().keys():
-                grid_param_dict['nu'] = [0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999]
+                grid_param_dict['nu'] = [1e-10, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999, 1-1e-10]
 
             # METRICS
             if 'metric' in clf.get_params().keys():
