@@ -137,7 +137,7 @@ def predict(df: pd.DataFrame
             , stack_include_preds: bool=True
             , final_include_data: bool=True
             , cross_validation_num: int=3
-            , cross_val_model = None
+            , cross_val_model=None
             ) -> pd.DataFrame:
 
     global s
@@ -517,14 +517,14 @@ def predict(df: pd.DataFrame
                     # grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
                     if not cross_val_model:
                         if hasattr(clf, 'classes_'):
-                            cross_val_model = RepeatedStratifiedKFold(n_splits=5, n_repeats=3,random_state=555)
+                            cross_val_model = RepeatedStratifiedKFold(n_splits=cross_validation_num, n_repeats=2, random_state=555)
                         else:
-                            cross_val_model = RepeatedKFold(n_splits=5, n_repeats=3,random_state=555)
+                            cross_val_model = RepeatedKFold(n_splits=cross_validation_num, n_repeats=2, random_state=555)
 
                     if 'windows' in platform.system().lower():  # or isinstance(clf,(MLPClassifier, MLPRegressor)):
-                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=cross_validation_num)
+                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=cross_val_model)
                     else:
-                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=cross_validation_num, n_jobs=-1)
+                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=cross_val_model, n_jobs=-1)
 
                     if retrain_model and \
                             (model.trained_model is not None) and \
