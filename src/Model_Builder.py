@@ -525,6 +525,8 @@ def predict(df: pd.DataFrame
                         model.trained_model = clf
                         model.grid_param_dict = grid_param_dict
                         model.x_columns = x_columns
+                        for k,v in grid.cv_results_.items():
+                            print('{0}\t: {1}'.format(k, v))
                     break
 
                 except (ValueError) as e:

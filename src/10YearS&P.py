@@ -5,6 +5,7 @@ from datetime import datetime
 from datetime import timedelta
 # import fancyimpute
 import matplotlib
+matplotlib.use('TkAgg')
 import numpy as np
 import pandas as pd
 import quandl
@@ -12,6 +13,7 @@ import bls
 import operator
 # from matplotlib import rcParams
 # import yahoo_finance
+from joblib import Parallel, delayed
 import itertools
 from statsmodels import robust
 from fredapi import Fred
@@ -46,7 +48,7 @@ correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlati
 
 # DIMENSION REDUCTION. Recommend you use either PCA OR
 pca_variance = None  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
-max_var_correlation = 0.8  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
+max_var_correlation = 0.90  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -673,8 +675,8 @@ def get_level1_correlations(df: pd.DataFrame, x_names: list, top_n: int=-1):
     print('Adding correlation terms')
     new_x_names = []
     d = dict()
-    for k, v in enumerate(x_names[:-1]):
-        for v1 in x_names[k + 1:]:
+    for i, v in enumerate(x_names[:-1]):
+        for v1 in x_names[i + 1:]:
             # Interactions between two different fields, generated through exponentiall weighted correlations
             interaction_field_name = '{0}_corr_{1}'.format(v, v1)
             if interaction_field_name not in df.columns.values:
@@ -728,13 +730,13 @@ def remove_correlated(df: pd.DataFrame, x_fields: list, max_corr_val: float):
     print('Removing one variable for each pair of variables with correlation greater than [{0}]'.format(max_corr_val))
     # Creates Correlation Matrix and Instantiates
     corr_matrix = df.loc[:, x_fields].corr()
-    iters = range(len(corr_matrix.columns) - 1)
-    drop_cols = []
+    # iters = range(len(corr_matrix.columns) - 1)
+    drop_cols = set()
 
     # Iterates through Correlation Matrix Table to find correlated columns
     # for i in iters:
-    for i, v in enumerate(x_fields):
-        for j in range(i):
+    for i, v in enumerate(x_fields[:-1]):
+        for j in reversed(range(i)):
             item = corr_matrix.iloc[j:(j+1), (i+1):(i+2)]
             col = item.columns
             row = item.index
@@ -742,9 +744,10 @@ def remove_correlated(df: pd.DataFrame, x_fields: list, max_corr_val: float):
             if val >= max_corr_val:
                 # Prints the correlated feature set and the corr val
                 # print(col.values[0], "|", row.values[0], "|", round(val[0][0], 2))
-                drop_cols.append(v)
+                drop_cols.add(v)
+                break
 
-    return_x_vals = [v for v in x_fields if v not in drop_cols]
+    return_x_vals = [v for v in x_fields if v not in list(drop_cols)]
     return return_x_vals
     # drops = sorted(set(drop_cols))[::-1]
 
@@ -1103,37 +1106,68 @@ except Exception as e:
         , 'corp_profit_margins'
     ]
 
-    # Interactions between a field and its previous values
+    ##########################################################################################################
+    # Interactions between each x value and its previous values
+    ##########################################################################################################
     for name in diff_x_names:
         for y in [1]:
             diff_field_name = '{0}_{1}yr_diff'.format(name, y)
             df[diff_field_name] = shift_x_years(df[name], y)
             x_names.append(diff_field_name)
+    print('X Names Length: {0}'.format(len(x_names)))
 
-    # IMPUTE VALUES!!!
+    ##########################################################################################################
+    # Value Imputation
+    ##########################################################################################################
     df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
 
-    # UNCOMMENT IF YOU WANT TO UTILIZE PCA
+    ##########################################################################################################
+    # If desired, use PCA to reduce the predictor variables
+    ##########################################################################################################
     if pca_variance and pca_variance < 1:
         x_names = convert_to_pca(df, x_names, explained_variance=pca_variance)
+        print('X Names Length: {0}'.format(len(x_names)))
+
+    ##########################################################################################################
+    # Remove any highly correlated items from the regression, to reduce issues with the model
+    ##########################################################################################################
+    if max_var_correlation and max_var_correlation < 1:
+        x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
+        print('X Names Length: {0}'.format(len(x_names)))
 
     # Perform the addition of the interaction terms
     corr_x_names = None
     print('Creating correlation interaction terms [{0}]'.format(correlation_type))
     if correlation_type == 'level_1':
         df, corr_x_names = get_level1_correlations(df=df, x_names=x_names)
+        print('X Names Length: {0}'.format(len(x_names)))
 
+    ##########################################################################################################
+    # Create interaction terms between the various x variables
+    ##########################################################################################################
     print('Creating direct interaction terms [{0}]'.format(interaction_type))
     if interaction_type == 'all':
         new_x_names = []
         get_all_interactions(x_names)
         x_names.extend(new_x_names)
+        print('X Names Length: {0}'.format(len(x_names)))
 
     elif interaction_type == 'level_1':
         df, inter_x_names = get_level1_interactions(df=df, x_names=x_names)
         x_names.extend(inter_x_names)
+        print('X Names Length: {0}'.format(len(x_names)))
 
+    ##########################################################################################################
+    # Remove any highly correlated items from the regression, to reduce issues with the model
+    ##########################################################################################################
+    if max_var_correlation and max_var_correlation < 1:
+        x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
+        x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
+        print('X Names Length: {0}'.format(len(x_names)))
 
+    ##########################################################################################################
+    # Convert all x fields to EWMA versions, to smooth craziness
+    ##########################################################################################################
     print('Converting fields to EWMA fields.')
     new_x_names = []
     for v in x_names:
@@ -1143,6 +1177,9 @@ except Exception as e:
         new_x_names.append(new_field_name)
     x_names = new_x_names
 
+    ##########################################################################################################
+    # Trim all x fields to a threshold of 4 STDs
+    ##########################################################################################################
     print('Converting fields to trimmed fields.')
     new_x_names = []
     for v in x_names:
@@ -1152,9 +1189,14 @@ except Exception as e:
         new_x_names.append(new_field_name)
     x_names = new_x_names
 
-    # IMPUTE VALUES!!!
+    ##########################################################################################################
+    # Value Imputation
+    ##########################################################################################################
     df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
 
+    ##########################################################################################################
+    # Create squared and squared-root versions of all the x fields
+    ##########################################################################################################
     # Generate all possible combinations of the imput variables.
     print('Creating squared and square root varieties of predictor variables')
     operations = [('pow2', math.pow, (2,)), ('sqrt', math.sqrt, None)]
@@ -1165,12 +1207,20 @@ except Exception as e:
             df[new_x_name] = df[v].abs().apply(op, args=var) * df[v].apply(lambda x: -1 if x < 0 else 1)
             new_x_names.append(new_x_name)
     x_names.extend(new_x_names)
+    print('X Names Length: {0}'.format(len(x_names)))
 
+    ##########################################################################################################
+    # Add the x value correlations (generated earlier) to the dataset
+    ##########################################################################################################
     if corr_x_names:
         x_names.extend(corr_x_names)
         # IMPUTE VALUES!!!
         df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
+        print('X Names Length: {0}'.format(len(x_names)))
 
+    ##########################################################################################################
+    # Derive special predictor variables
+    ##########################################################################################################
     print('Deriving special predictor variables.')
     df, new_x_names = get_diff_std_and_flags(df, 'sp500')
     # x_names.extend(new_x_names)
@@ -1178,15 +1228,13 @@ except Exception as e:
     df[sp500_qtr_since_last_corr] = time_since_last_true(df[new_x_names[-1]])
     x_names.append(sp500_qtr_since_last_corr)
 
-
     ##########################################################################################################
     # Finally, remove any highly correlated items from the regression, to reduce issues with the model
     ##########################################################################################################
     if max_var_correlation and max_var_correlation < 1:
-        for v in x_names:
-            if isinstance(v, (list, tuple)):
-                print('This is fucked up: [{0}]'.format(v))
         x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
+        print('X Names Length: {0}'.format(len(x_names)))
+
 
 # print('===== Head =====\n', df.head(5))
 # print('===== Tail =====\n', df.tail(5))
