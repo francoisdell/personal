@@ -136,7 +136,7 @@ def predict(df: pd.DataFrame
             , pca_explained_var: float=1.0
             , stack_include_preds: bool=True
             , final_include_data: bool=True
-            , cross_val_model: None
+            , cross_val_model = None
             ) -> pd.DataFrame:
 
     global s
