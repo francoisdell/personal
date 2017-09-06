@@ -48,7 +48,7 @@ correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlati
 
 # DIMENSION REDUCTION. Recommend you use either PCA or a maximum value for variance. Otherwise the data could get big.
 pca_variance = None  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
-max_var_correlation = 0.85  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
+max_var_correlation = 0.8  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -67,8 +67,8 @@ recession_models = [
                    # mb.ModelSet(final_models=['logit','pass_agg_c','nearest_centroid'],
                    #              initial_models=['logit','pass_agg_c','nearest_centroid','gbc'])
                     # 'gauss_proc_c'
-                    mb.ModelSet(final_models=['neural_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','gauss_proc_c'],
-                                initial_models=['neural_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','bernoulli_nb'])
+                    mb.ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','neural_c','gauss_proc_c'],
+                                initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','bernoulli_nb'])
                   # ,['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','gbc','pass_agg_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr:   ||  3yr:
@@ -1055,9 +1055,9 @@ except Exception as e:
             , 'capacity_util_chem'
             # , 'gold_fix_3pm' # Gold price has been generally increasing over the time period. Don't use.
             # , 'fed_funds_rate' # Fed funds rate has been generally declining over the time period. Don't use.
-            , 'tsy_3m10y_curve'
+            # , 'tsy_3m10y_curve'
             , 'industrial_prod'
-            , 'tsy_10yr_minus_fed_funds_rate'
+            # , 'tsy_10yr_minus_fed_funds_rate'
             # , 'tsy_10yr_minus_cpi'
             # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
             # , 'gdp_nom' # GDP is generally always rising. Don't use.
@@ -1098,8 +1098,8 @@ except Exception as e:
         , 'med_family_income'
         , 'unempl_rate'
         , 'industrial_prod'
-        , 'tsy_10yr_minus_fed_funds_rate'
-        , 'tsy_10yr_minus_cpi'
+        # , 'tsy_10yr_minus_fed_funds_rate'
+        # , 'tsy_10yr_minus_cpi'
         , 'real_med_family_income'
         , 'combanks_business_loans'
         , 'combanks_assets_tot'
