@@ -136,6 +136,7 @@ def predict(df: pd.DataFrame
             , pca_explained_var: float=1.0
             , stack_include_preds: bool=True
             , final_include_data: bool=True
+            , cross_validation_num: int=3
             , cross_val_model = None
             ) -> pd.DataFrame:
 
@@ -215,6 +216,11 @@ def predict(df: pd.DataFrame
                     else:
                         mask_train[idx] = False
                     mask_train_qty += 1
+
+        if cross_validation_num > 1:
+            print("Don't need to split the set into train/validate since we're using cross validation.")
+            mask_train = mask_train_test
+
         # print("Mask_Train Value Counts\n", pd.Series(mask_train).value_counts())
         # print("Mask_Test Value Counts\n", pd.Series(mask_test).value_counts())
     # x_mappings, x_columns, x_vectors = set_vectors(df.loc[mask_train_test,], x_fields)
@@ -516,9 +522,9 @@ def predict(df: pd.DataFrame
                             cross_val_model = RepeatedKFold(n_splits=5, n_repeats=3,random_state=555)
 
                     if 'windows' in platform.system().lower():  # or isinstance(clf,(MLPClassifier, MLPRegressor)):
-                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=5)
+                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=cross_validation_num)
                     else:
-                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=5, n_jobs=-1)
+                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=cross_validation_num, n_jobs=-1)
 
                     if retrain_model and \
                             (model.trained_model is not None) and \
