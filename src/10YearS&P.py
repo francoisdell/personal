@@ -46,9 +46,9 @@ selection_limit = 5.0e-2
 interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
 correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
 
-# DIMENSION REDUCTION. Recommend you use either PCA OR
+# DIMENSION REDUCTION. Recommend you use either PCA or a maximum value for variance. Otherwise the data could get big.
 pca_variance = None  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
-max_var_correlation = 0.90  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
+max_var_correlation = 0.99  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -66,7 +66,7 @@ recession_models = [
                    # mb.ModelSet(final_models=['logit','pass_agg_c','nearest_centroid'],
                    #              initial_models=['logit','pass_agg_c','nearest_centroid','gbc'])
                     # 'gauss_proc_c'
-                    mb.ModelSet(final_models=['neural_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c'],
+                    mb.ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c'],
                                 initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','bernoulli_nb'])
                   # ,['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr:   ||  3yr:
@@ -240,10 +240,11 @@ def chart(d, ys, invert, log_scale, save_name=None, title=None):
         plt.title(title)
     else:
         plt.title(list(itertools.chain(*ys))[0])
-    print("Showing Plot...")
-    plt.show()
     if save_name:
         fig.savefig(save_name)
+    print("Showing Plot...")
+    plt.show()
+
 
 def get_obj_name(o) -> str:
     return [k for k, v in locals().items() if v is o][0]
@@ -737,15 +738,21 @@ def remove_correlated(df: pd.DataFrame, x_fields: list, max_corr_val: float):
     # for i in iters:
     for i, v in enumerate(x_fields[:-1]):
         for j in reversed(range(i)):
-            item = corr_matrix.iloc[j:(j+1), (i+1):(i+2)]
-            col = item.columns
-            row = item.index
-            val = item.values
-            if val >= max_corr_val:
+            max_corr = corr_matrix.iloc[j:(j+1), (i+1):].max()
+            if max_corr >= max_corr_val:
                 # Prints the correlated feature set and the corr val
                 # print(col.values[0], "|", row.values[0], "|", round(val[0][0], 2))
                 drop_cols.add(v)
                 break
+            # item = corr_matrix.iloc[j:(j+1), (i+1):(i+2)]
+            # col = item.columns
+            # row = item.index
+            # val = item.values
+            # if val >= max_corr_val:
+            #     # Prints the correlated feature set and the corr val
+            #     # print(col.values[0], "|", row.values[0], "|", round(val[0][0], 2))
+            #     drop_cols.add(v)
+            #     break
 
     return_x_vals = [v for v in x_fields if v not in list(drop_cols)]
     return return_x_vals
@@ -1122,13 +1129,6 @@ except Exception as e:
     df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
 
     ##########################################################################################################
-    # If desired, use PCA to reduce the predictor variables
-    ##########################################################################################################
-    if pca_variance and pca_variance < 1:
-        x_names = convert_to_pca(df, x_names, explained_variance=pca_variance)
-        print('X Names Length: {0}'.format(len(x_names)))
-
-    ##########################################################################################################
     # Remove any highly correlated items from the regression, to reduce issues with the model
     ##########################################################################################################
     if max_var_correlation and max_var_correlation < 1:
@@ -1161,7 +1161,6 @@ except Exception as e:
     # Remove any highly correlated items from the regression, to reduce issues with the model
     ##########################################################################################################
     if max_var_correlation and max_var_correlation < 1:
-        x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
         x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
         print('X Names Length: {0}'.format(len(x_names)))
 
@@ -1235,6 +1234,12 @@ except Exception as e:
         x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
         print('X Names Length: {0}'.format(len(x_names)))
 
+    ##########################################################################################################
+    # If desired, use PCA to reduce the predictor variables
+    ##########################################################################################################
+    if pca_variance and pca_variance < 1:
+        x_names = convert_to_pca(df, x_names, explained_variance=pca_variance)
+        print('X Names Length: {0}'.format(len(x_names)))
 
 # print('===== Head =====\n', df.head(5))
 # print('===== Tail =====\n', df.tail(5))
