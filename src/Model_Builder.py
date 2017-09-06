@@ -133,6 +133,8 @@ def predict(df: pd.DataFrame
             , random_train_test: bool=True
             , max_train_size: int=50000
             , pca_explained_var: float=1.0
+            , stack_include_preds: bool=True
+            , final_include_data: bool=True
             ) -> pd.DataFrame:
 
     global s
@@ -265,6 +267,8 @@ def predict(df: pd.DataFrame
         x_columns, x_train, x_mappings = get_vectors(df[mask_train], x_fields, x_mappings)
         x_train = fix_np_nan(x_train)
 
+    pred_x_fields = dict()
+    pred_x_mappings = dict()
     for idx, model in enumerate(model_type.get_models()):
 
         # INITIAL AND FINAL MODELS: TRAIN ANY UNTRAINED MODELS
@@ -591,29 +595,39 @@ def predict(df: pd.DataFrame
                     prob_field_names = [k + '_' + model.model_class + '_prob_' + f.lower().replace(' ', '_') for f in
                                         list(y_mappings[k].classes_)[:pred_probs.shape[1]]]
                     prob_field_names = [get_unique_name(v, df.columns.values) for v in prob_field_names]
-                    df_probs = pd.DataFrame(data=pred_probs
+                    df_pred = pd.DataFrame(data=pred_probs
                                             , columns=prob_field_names
                                             , index=df_valid_iter.index)
-                    df_probs = df_probs.loc[:, df_probs.columns.values[:-1]]
-                    for f in df_probs.columns.values:
+                    df_pred = df_pred.loc[:, df_pred.columns.values[:-1]]
+                    for f in df_pred.columns.values:
                         new_x_fields[f] = 'num'
-                    df = df.join(df_probs, how='inner')
+                    # df = df.join(df_preds, how='inner')
                     print('Unique probabilities: ', len(np.unique(pred_probs)))
                     print('Probability variance: ', np.var(pred_probs))
 
                 else:
                     pred_field_name = get_unique_name('{0}_pred_{1}'.format(k, model.model_class), df.columns.values)
-                    df[pred_field_name] = preds
+                    df_pred = pd.DataFrame(data=preds
+                                            , columns=[pred_field_name]
+                                            , index=df_valid_iter.index)
+                    # df[pred_field_name] = preds
+
                     new_x_fields[pred_field_name] = 'cat' if not isinstance(v, str) else v
                     print('Unique predictions: ', len(np.unique(preds)))
 
-                x_fields = {**x_fields, **new_x_fields}
-                x_mappings = {**x_mappings, **train_models(df[mask_train], new_x_fields)}
-                new_x_columns, new_x_train, x_mappings = get_vectors(df[mask_train], new_x_fields, x_mappings)
-                x_columns += new_x_columns
-                new_x_train = fix_np_nan(new_x_train)
-                # new_x_train = sparse.csc_matrix(np.hstack(new_x_train))
-                x_train = matrix_hstack((x_train, new_x_train), return_sparse=True)
+                df = df.join(df_pred, how='inner')
+
+                if stack_include_preds:
+                    x_fields = {**x_fields, **new_x_fields}
+                    x_mappings = {**x_mappings, **train_models(df[mask_train], new_x_fields)}
+                    new_x_columns, new_x_train, x_mappings = get_vectors(df[mask_train], new_x_fields, x_mappings)
+                    x_columns += new_x_columns
+                    new_x_train = fix_np_nan(new_x_train)
+                    # new_x_train = sparse.csc_matrix(np.hstack(new_x_train))
+                    x_train = matrix_hstack((x_train, new_x_train), return_sparse=True)
+                else:
+                    pred_x_fields = {**pred_x_fields, **new_x_fields}
+                    pred_x_mappings = {**pred_x_mappings, **train_models(df[mask_train], new_x_fields)}
 
             if hasattr(clf, 'intercept_') and (isinstance(clf.intercept_, (list)) and len(clf.intercept_) == 1):
                 print('--- Model over-normalization testing ---\n'
@@ -624,6 +638,10 @@ def predict(df: pd.DataFrame
 
         # FINAL MODELS ONLY: RUN THE MODEL ON THE VALIDATION SET TO GENERATE PREDICTIONS
         elif model.model_usage == 'final':
+
+            if not final_include_data:
+                x_fields = final_x_fields
+                x_mappings = pred_x_mappings
 
             # If PCA has been specified, convert x_fields to PCA
             if pca_explained_var < 1:

@@ -48,7 +48,7 @@ correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlati
 
 # DIMENSION REDUCTION. Recommend you use either PCA or a maximum value for variance. Otherwise the data could get big.
 pca_variance = None  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
-max_var_correlation = 0.99  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
+max_var_correlation = 0.95  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -737,13 +737,12 @@ def remove_correlated(df: pd.DataFrame, x_fields: list, max_corr_val: float):
     # Iterates through Correlation Matrix Table to find correlated columns
     # for i in iters:
     for i, v in enumerate(x_fields[:-1]):
-        for j in reversed(range(i)):
-            max_corr = corr_matrix.iloc[j:(j+1), (i+1):].max()
-            if max_corr >= max_corr_val:
-                # Prints the correlated feature set and the corr val
-                # print(col.values[0], "|", row.values[0], "|", round(val[0][0], 2))
-                drop_cols.add(v)
-                break
+        max_corr = corr_matrix.iloc[i, (i+1):].max()
+        if max_corr >= max_corr_val:
+            # Prints the correlated feature set and the corr val
+            # print(col.values[0], "|", row.values[0], "|", round(val[0][0], 2))
+            drop_cols.add(v)
+        # for j in reversed(range(i)):
             # item = corr_matrix.iloc[j:(j+1), (i+1):(i+2)]
             # col = item.columns
             # row = item.index
@@ -983,8 +982,6 @@ except Exception as e:
             , 'tsy_10yr_yield'
             , 'tsy_5yr_yield'
             , 'tsy_3mo_yield'
-            , 'cape'
-            , 'tobin_q'
             # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
             , 'unempl_rate'
             , 'empl_construction'
@@ -1005,16 +1002,15 @@ except Exception as e:
             , 'med_family_income_vs_house_price'
             , 'pers_savings_rt'
             , 'corp_profit_margins'
-
-            ]
+            , 'cape'
+            , 'tobin_q'
+        ]
         """
         x_names = [
             'equity_alloc'
             # , 'tsy_10yr_yield'
             # , 'tsy_5yr_yield'
             # , 'tsy_3mo_yield'
-            , 'cape'
-            , 'tobin_q'
             # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
             , 'unempl_rate'
             # , 'empl_construction'
@@ -1035,6 +1031,8 @@ except Exception as e:
             , 'med_family_income_vs_house_price'
             # , 'pers_savings_rt'
             # , 'corp_profit_margins'
+            , 'cape'
+            , 'tobin_q'
             ]
         """
 
@@ -1044,8 +1042,6 @@ except Exception as e:
             # , 'tsy_10yr_yield' # Treasury prices have been generally increasing over the time period. Don't use.
             # , 'tsy_5yr_yield' # Treasury prices have been generally increasing over the time period. Don't use.
             # , 'tsy_3mo_yield' # Treasury prices have been generally increasing over the time period. Don't use.
-            , 'cape'
-            , 'tobin_q'
             # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
             , 'unempl_rate'
             # , 'empl_construction'  # Construction employees heave been generally increasing over the time period. Don't use.
@@ -1066,6 +1062,8 @@ except Exception as e:
             , 'med_family_income_vs_house_price'
             , 'pers_savings_rt'
             , 'corp_profit_margins'
+            , 'cape'
+            , 'tobin_q'
         ]
 
     empty_cols = [c for c in df.columns.values if all(df[c].isnull())]
@@ -1086,8 +1084,6 @@ except Exception as e:
     print('Adding x-year diff terms.')
     diff_x_names = [
         'gdp_nom'
-        , 'cape'
-        , 'tobin_q'
         , 'cpi_urb_nonvol'
         , 'empl_construction'
         , 'industrial_prod'
@@ -1111,6 +1107,8 @@ except Exception as e:
         , 'fed_funds_rate'
         , 'gold_fix_3pm'
         , 'corp_profit_margins'
+        , 'cape'
+        , 'tobin_q'
     ]
 
     ##########################################################################################################
