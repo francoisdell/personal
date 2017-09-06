@@ -32,6 +32,7 @@ import sklearn.feature_extraction.text as sk_text
 import sklearn.preprocessing as sk_prep
 from sklearn import feature_extraction as sk_feat
 from sklearn import feature_selection as sk_feat_sel
+from sklearn.model_selection import RepeatedKFold, RepeatedStratifiedKFold
 from sklearn.decomposition import TruncatedSVD
 from sklearn.neural_network import MLPClassifier, MLPRegressor, BernoulliRBM
 from sklearn.gaussian_process import GaussianProcessClassifier, GaussianProcessRegressor
@@ -135,6 +136,7 @@ def predict(df: pd.DataFrame
             , pca_explained_var: float=1.0
             , stack_include_preds: bool=True
             , final_include_data: bool=True
+            , cross_val_model: None
             ) -> pd.DataFrame:
 
     global s
@@ -507,6 +509,12 @@ def predict(df: pd.DataFrame
             while True:
                 try:
                     # grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
+                    if not cross_val_model:
+                        if hasattr(clf, 'classes_'):
+                            cross_val_model = RepeatedStratifiedKFold(n_splits=5, n_repeats=3,random_state=555)
+                        else:
+                            cross_val_model = RepeatedKFold(n_splits=5, n_repeats=3,random_state=555)
+
                     if 'windows' in platform.system().lower():  # or isinstance(clf,(MLPClassifier, MLPRegressor)):
                         grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=5)
                     else:
@@ -640,7 +648,7 @@ def predict(df: pd.DataFrame
         elif model.model_usage == 'final':
 
             if not final_include_data:
-                x_fields = final_x_fields
+                x_fields = pred_x_fields
                 x_mappings = pred_x_mappings
 
             # If PCA has been specified, convert x_fields to PCA

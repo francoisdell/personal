@@ -61,12 +61,13 @@ verbose = False
 fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
 ewm_halflife = 4.2655*2  # Halflife for EWM calculations. 4.2655 corresponds to a 0.125 weight.
 default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster, if less ideal.
-
+stack_include_preds = False
+final_include_data = True
 recession_models = [
                    # mb.ModelSet(final_models=['logit','pass_agg_c','nearest_centroid'],
                    #              initial_models=['logit','pass_agg_c','nearest_centroid','gbc'])
                     # 'gauss_proc_c'
-                    mb.ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c'],
+                    mb.ModelSet(final_models=['neural_c','logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','gauss_proc_c'],
                                 initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','bernoulli_nb'])
                   # ,['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr:   ||  3yr:
@@ -296,7 +297,9 @@ def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, model_na
                     , predict_all=True
                     , verbose=verbose
                     , train_pct=train_pct
-                    , random_train_test=False)
+                    , random_train_test=False
+                    , stack_include_preds=stack_include_preds
+                    , final_include_data=final_include_data)
 
     forward_y_field_name_pred = 'pred_' + forward_y_field_name
     #################################
@@ -448,7 +451,9 @@ def predict_recession(df: pd.DataFrame
                     , verbose=verbose
                     , train_pct=train_pct
                     , random_train_test=False
-                    ,pca_explained_var=1.0):
+                    , pca_explained_var=1.0
+                    , stack_include_preds=stack_include_preds
+                    , final_include_data=final_include_data):
 
         forward_y_field_name_pred = 'pred_' + forward_y_field_name
         #################################
