@@ -23,7 +23,7 @@ from sklearn.decomposition import TruncatedSVD
 from inspect import isfunction
 from pandas.compat import StringIO
 import requests_cache
-import Model_Builder as mb
+from Model_Builder import Model_Builder, ModelSet
 from collections import OrderedDict
 from typing import Union, Callable
 import io
@@ -45,6 +45,7 @@ selection_limit = 5.0e-2
 
 interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
 correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
+transform_vars = False
 
 # DIMENSION REDUCTION. Recommend you use either PCA or a maximum value for variance. Otherwise the data could get big.
 pca_variance = None  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
@@ -64,11 +65,11 @@ default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is gene
 stack_include_preds = False
 final_include_data = False
 recession_models = [
-                   # mb.ModelSet(final_models=['logit','pass_agg_c','nearest_centroid'],
+                   # ModelSet(final_models=['logit','pass_agg_c','nearest_centroid'],
                    #              initial_models=['logit','pass_agg_c','nearest_centroid','gbc'])
                     # 'gauss_proc_c'
-                    mb.ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','neural_c','gauss_proc_c'],
-                                initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','bernoulli_nb'])
+                    ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','neural_c','gauss_proc_c'],
+                                initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc'])
                   # ,['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','gbc','pass_agg_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr:   ||  3yr:
@@ -286,7 +287,7 @@ def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, model_na
     if isinstance(model_name, str):
         models = [model_name]
     report_name = 'returns_{0}yr_{1}'.format(years_forward, model_name[0] if len(model_name) == 1 else 'stacked')
-    df = mb.predict(df
+    m = Model_Builder(df
                     , x_fields=x_fields
                     , y_field=y_field
                     , model_type=model_name
@@ -300,6 +301,7 @@ def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, model_na
                     , random_train_test=False
                     , stack_include_preds=stack_include_preds
                     , final_include_data=final_include_data)
+    df = m.predict()
 
     forward_y_field_name_pred = 'pred_' + forward_y_field_name
     #################################
@@ -410,7 +412,7 @@ def predict_recession(df: pd.DataFrame
                       , x_names: list
                       , y_field_name: str
                       , years_forward: int
-                      , model_set: mb.ModelSet)\
+                      , model_set: ModelSet)\
         -> (OrderedDict, str):
 
     print("\n-----------------------"
@@ -439,21 +441,24 @@ def predict_recession(df: pd.DataFrame
 
     report_name = 'recession_{0}yr_{1}'.format(years_forward, model_set)
 
-    for df, final_model_name in mb.predict(df
-                    , x_fields=x_fields
-                    , y_field=y_field
-                    , model_type=model_set
-                    , report_name=report_name
-                    , show_model_tests=True
-                    , retrain_model=False
-                    , selection_limit=selection_limit
-                    , predict_all=True
-                    , verbose=verbose
-                    , train_pct=train_pct
-                    , random_train_test=False
-                    , pca_explained_var=1.0
-                    , stack_include_preds=stack_include_preds
-                    , final_include_data=final_include_data):
+    m = Model_Builder(df
+                        , x_fields=x_fields
+                        , y_field=y_field
+                        , model_type=model_set
+                        , report_name=report_name
+                        , show_model_tests=True
+                        , retrain_model=False
+                        , selection_limit=selection_limit
+                        , predict_all=True
+                        , verbose=verbose
+                        , train_pct=train_pct
+                        , random_train_test=False
+                        , pca_explained_var=1.0
+                        , stack_include_preds=stack_include_preds
+                        , final_include_data=final_include_data
+                        )
+
+    for df, final_model_name in m.predict():
 
         forward_y_field_name_pred = 'pred_' + forward_y_field_name
         #################################
@@ -467,7 +472,7 @@ def predict_recession(df: pd.DataFrame
         df[y_field_name_pred] = df[forward_y_field_name_pred].shift(years_forward * 4)
         chart_y_field_names = [y_field_name, y_field_name_pred]
 
-        y_pred_names = mb.get_pred_field_names()
+        y_pred_names = m.new_fields
         y_prob_field_name = '{0}_prob_1.0'.format(forward_y_field_name)
         if y_prob_field_name in y_pred_names:
             df[y_prob_field_name] = df[y_prob_field_name].shift(years_forward * 4)
@@ -1200,16 +1205,17 @@ except Exception as e:
     # Create squared and squared-root versions of all the x fields
     ##########################################################################################################
     # Generate all possible combinations of the imput variables.
-    print('Creating squared and square root varieties of predictor variables')
-    operations = [('pow2', math.pow, (2,)), ('sqrt', math.sqrt, None)]
-    new_x_names = []
-    for v in x_names:
-        for suffix, op, var in operations:
-            new_x_name = '{0}_{1}'.format(v, suffix)
-            df[new_x_name] = df[v].abs().apply(op, args=var) * df[v].apply(lambda x: -1 if x < 0 else 1)
-            new_x_names.append(new_x_name)
-    x_names.extend(new_x_names)
-    print('X Names Length: {0}'.format(len(x_names)))
+    if transform_vars:
+        print('Creating squared and square root varieties of predictor variables')
+        operations = [('pow2', math.pow, (2,)), ('sqrt', math.sqrt, None)]
+        new_x_names = []
+        for v in x_names:
+            for suffix, op, var in operations:
+                new_x_name = '{0}_{1}'.format(v, suffix)
+                df[new_x_name] = df[v].abs().apply(op, args=var) * df[v].apply(lambda x: -1 if x < 0 else 1)
+                new_x_names.append(new_x_name)
+        x_names.extend(new_x_names)
+        print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
     # Add the x value correlations (generated earlier) to the dataset
