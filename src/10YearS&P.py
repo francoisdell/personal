@@ -45,11 +45,11 @@ selection_limit = 5.0e-2
 
 interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
 correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
-transform_vars = False
+transform_vars = True
 
 # DIMENSION REDUCTION. Recommend you use either PCA or a maximum value for variance. Otherwise the data could get big.
 pca_variance = None  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
-max_var_correlation = 0.8  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
+max_var_correlation = 0.7  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -65,11 +65,11 @@ default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is gene
 stack_include_preds = False
 final_include_data = False
 recession_models = [
-                   # ModelSet(final_models=['logit','pass_agg_c','nearest_centroid'],
-                   #              initial_models=['logit','pass_agg_c','nearest_centroid','gbc'])
+                   ModelSet(final_models=['logit','svc','etree_c'],
+                            initial_models=['logit','svc','etree_c'])
                     # 'gauss_proc_c'
-                    ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','neural_c','gauss_proc_c'],
-                                initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc'])
+                    # ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','neural_c','gauss_proc_c'],
+                    #             initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc'])
                   # ,['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr:   ||  3yr:
                   # ,['sgd_c','knn_c','gbc','pass_agg_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr:   ||  3yr:

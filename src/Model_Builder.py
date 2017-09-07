@@ -52,8 +52,11 @@ from sklearn.neighbors import NearestCentroid
 from sklearn.svm import SVC, SVR, NuSVR, NuSVC
 from sklearn.metrics import r2_score
 from scipy.special import expit
+from numbers import Number
 from sklearn import metrics
 import warnings
+from statistics import mean
+
 
 pd.options.mode.chained_assignment = None
 
@@ -174,7 +177,7 @@ class Model_Builder:
     
         elif isinstance(self.model_type, list):
             self.model_type = ModelSet(self.model_type[-1], self.model_type[:-1])
-        elif isinstance(model_type, str):
+        elif isinstance(self.model_type, str):
             self.model_type = ModelSet(self.model_type)
     
         model_dir = s.get_model_dir()
@@ -205,7 +208,7 @@ class Model_Builder:
                 print("Test data fraction:", test_pct)
     
             if self.random_train_test:
-                mask = np.random.rand(len(df[key]))
+                mask = np.random.rand(len(self.df[key]))
                 mask_train = [a and b for a, b in zip(mask <= self.train_pct, mask_train_test != False)]
                 mask_test = [a and b for a, b in zip(mask > (1-test_pct), mask_train_test != False)]
             else:
@@ -264,7 +267,11 @@ class Model_Builder:
         y_mappings = self.train_models(self.df[mask_train], self.y_field)
         _, y_train, y_mappings = self.get_vectors(self.df[mask_train], self.y_field, y_mappings, is_y=True)
 
-        x_train, self.x_fields, x_columns, x_mappings = self.get_fields(self.df, self.x_fields, y_train, mask_train, self.selection_limit)
+        x_train, self.x_fields, x_columns, x_mappings = self.get_fields(self.df,
+                                                                        self.x_fields,
+                                                                        y_train,
+                                                                        mask_train,
+                                                                        self.selection_limit)
     
         pred_x_fields = dict()
         pred_x_mappings = dict()
@@ -277,8 +284,7 @@ class Model_Builder:
                 self.get_fields(self.df,
                                 self.x_fields,
                                 y_train,
-                                mask_train,
-                                self.selection_limit)
+                                mask_train)
 
             model, x_train = self.train_predictive_model(model,
                                                         self.retrain_model,
@@ -351,18 +357,19 @@ class Model_Builder:
                     print('Unique predictions: ', len(np.unique(preds)))
 
                 self.df = self.df.join(df_pred, how='inner')
+                new_x_mappings = self.train_models(self.df[mask_train], new_x_fields)
 
                 if self.stack_include_preds:
-                    x_fields = {**x_fields, **new_x_fields}
-                    x_mappings = {**x_mappings, **self.train_models(df[mask_train], new_x_fields)}
-                    new_x_columns, new_x_train, x_mappings = self.get_vectors(df[mask_train], new_x_fields, x_mappings)
+                    self.x_fields = {**self.x_fields, **new_x_fields}
+                    x_mappings = {**x_mappings, **new_x_mappings}
+                    new_x_columns, new_x_train, x_mappings = self.get_vectors(self.df[mask_train], new_x_fields, x_mappings)
                     x_columns += new_x_columns
                     new_x_train = fix_np_nan(new_x_train)
                     # new_x_train = sparse.csc_matrix(np.hstack(new_x_train))
                     x_train = self.matrix_hstack((x_train, new_x_train), return_sparse=True)
                 else:
                     pred_x_fields = {**pred_x_fields, **new_x_fields}
-                    pred_x_mappings = {**pred_x_mappings, **self.train_models(self.df[mask_train], new_x_fields)}
+                    pred_x_mappings = {**pred_x_mappings, **new_x_mappings}
 
             if hasattr(clf, 'intercept_') and (isinstance(clf.intercept_, (list)) and len(clf.intercept_) == 1):
                 print('--- Model over-normalization testing ---\n'
@@ -374,16 +381,16 @@ class Model_Builder:
 
         for idx, model in enumerate(self.model_type.final_models):
 
-            if not self.final_include_data:
-                x_fields = pred_x_fields
-                # x_mappings = pred_x_mappings
+            if self.final_include_data:
+                self.x_fields = {**self.x_fields, **pred_x_fields}
+            else:
+                self.x_fields = pred_x_fields
 
             x_train, self.x_fields, x_columns, x_mappings = \
                 self.get_fields(self.df,
                                 self.x_fields,
                                 y_train,
-                                mask_train,
-                                self.selection_limit)
+                                mask_train)
 
             model, x_train = self.train_predictive_model(model,
                                                         self.retrain_model,
@@ -397,7 +404,7 @@ class Model_Builder:
             # If PCA has been specified, convert x_fields to PCA
             if self.pca_explained_var < 1:
                 self.df, x_columns = self.convert_to_pca(pca_df=self.df,
-                                                    field_names=list(x_fields.keys()),
+                                                    field_names=list(self.x_fields.keys()),
                                                     explained_variance=self.pca_explained_var)
 
             # INITIAL AND FINAL MODELS: SHOW MODEL TESTS
@@ -405,7 +412,7 @@ class Model_Builder:
                 print("--------------------------\n"
                       "-- TEST SET APPLICATION --\n"
                       "--------------------------")
-                x_columns, x_test, x_mappings = self.get_vectors(self.df[mask_test], x_fields, x_mappings)
+                x_columns, x_test, x_mappings = self.get_vectors(self.df[mask_test], self.x_fields, x_mappings)
                 _, y_test, y_mappings = self.get_vectors(self.df[mask_test], self.y_field, y_mappings, is_y=True)
                 x_test = fix_np_nan(x_test)
 
@@ -450,7 +457,7 @@ class Model_Builder:
                     scores, p_vals = sk_feat_sel.f_regression(x_test, y_test, center=False)
 
                     nonzero_coefs_mask = [v != 0 for v in coefs]
-                    significant_coefs_mask = [v <= selection_limit for v in p_vals]
+                    significant_coefs_mask = [v <= self.selection_limit for v in p_vals]
 
                     print_df = pd.DataFrame(list(zip([v[0] for v in x_columns]
                                                      , coefs
@@ -607,7 +614,7 @@ class Model_Builder:
                 print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
 
                 df_valid_iter = self.df[mask_validate].iloc[min_idx:max_idx]
-                x_valid_columns, x_validate, x_mappings = self.get_vectors(df_valid_iter, x_fields, x_mappings)
+                x_valid_columns, x_validate, x_mappings = self.get_vectors(df_valid_iter, self.x_fields, x_mappings)
 
                 x_validate = fix_np_nan(x_validate)
 
@@ -668,7 +675,7 @@ class Model_Builder:
         # INITIAL AND FINAL MODELS: TRAIN ANY UNTRAINED MODELS
         # print(x_train.shape)
         if self.verbose:
-            print('FIELDS\n', np.asarray(list(x_fields.keys())))
+            print('FIELDS\n', np.asarray(list(self.x_fields.keys())))
         # y_train, uniques_index = pd.factorize(train[y_fields])
 
 
@@ -679,26 +686,26 @@ class Model_Builder:
 
     def get_fields(self,
                    df,
-                   x_fields,
-                   y_train,
+                   fields,
+                   y,
                    mask,
-                   selection_limit):
+                   selection_limit: float=1.0):
 
-        x_mappings = self.train_models(df[mask], x_fields)
-        x_columns, x, x_mappings = self.get_vectors(df[mask], x_fields, x_mappings)
+        mappings = self.train_models(df[mask], fields)
+        columns, x, mappings = self.get_vectors(df[mask], fields, mappings)
         x = fix_np_nan(x)
 
         if selection_limit < 1.0:
             print('Pruning x_fields for any variables with a p-value > {0}'.format(selection_limit))
-            scores, p_vals = sk_feat_sel.f_regression(x, y_train, center=False)
-            for x_field_name in list(x_fields.keys()):
-                xcol_indices = [idx for idx, vals in enumerate(x_columns) if vals[2] == x_field_name]
+            scores, p_vals = sk_feat_sel.f_regression(x, y, center=False)
+            for field_name in list(fields.keys()):
+                xcol_indices = [idx for idx, vals in enumerate(columns) if vals[2] == field_name]
                 if all(p_vals[idx] > selection_limit or p_vals[idx] == np.nan for idx in xcol_indices):
-                    x_fields.pop(x_field_name)
-            x_columns, x, x_mappings = self.get_vectors(df[mask], x_fields, x_mappings)
+                    fields.pop(field_name)
+            columns, x, mappings = self.get_vectors(df[mask], fields, mappings)
             x = fix_np_nan(x)
 
-        return x, x_fields, x_columns, x_mappings
+        return x, fields, columns, mappings
 
     
     def convert_to_pca(self, 
@@ -1070,6 +1077,8 @@ class Model_Builder:
                         model.grid_param_dict = grid_param_dict
                         model.x_columns = x_columns
                         for k, v in grid.cv_results_.items():
+                            if isinstance(v, (list)) and all([isinstance(v1, (float,complex,int,Number)) for v1 in v]):
+                                v = mean(v)
                             print('{0}\t: {1}'.format(k, v))
                     break
 
@@ -1127,7 +1136,7 @@ class Model_Builder:
                     # vectorizer = sk_prep.StandardScaler(with_mean=False)
                 else:
                     vectorizer = sk_prep.StandardScaler()
-                # vectorizer = sk_prep.MinMaxScaler()
+                    # vectorizer = sk_prep.MinMaxScaler()
                 vectorizer.fit(df[f].apply(pd.to_numeric, errors='coerce').fillna(0).values.astype(np.float64).reshape(-1, 1))
     
             elif t == 'num_noscale':
