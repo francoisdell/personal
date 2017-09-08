@@ -1053,7 +1053,7 @@ except Exception as e:
             # , 'tsy_5yr_yield' # Treasury prices have been generally increasing over the time period. Don't use.
             # , 'tsy_3mo_yield' # Treasury prices have been generally increasing over the time period. Don't use.
             # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
-            , 'unempl_rate'
+            # , 'unempl_rate'
             # , 'empl_construction'  # Construction employees heave been generally increasing over the time period. Don't use.
             , 'sp500_peratio'
             , 'capacity_util_mfg'
@@ -1070,7 +1070,7 @@ except Exception as e:
             # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
             # , 'tsy_30yr_yield' # Not much history
             , 'med_family_income_vs_house_price'
-            , 'pers_savings_rt'
+            # , 'pers_savings_rt'
             , 'corp_profit_margins'
             , 'cape'
             , 'tobin_q'
@@ -1095,7 +1095,7 @@ except Exception as e:
     diff_x_names = [
         'gdp_nom'
         , 'cpi_urb_nonvol'
-        , 'empl_construction'
+        # , 'empl_construction'
         , 'industrial_prod'
         , 'housing_starts'
         , 'housing_supply'
@@ -1111,14 +1111,14 @@ except Exception as e:
         , 'mortage_debt_individuals'
         , 'real_estate_loans'
         , 'foreign_dir_invest'
-        , 'pers_savings_rt'
-        , 'gross_savings'
+        # , 'pers_savings_rt'
+        # , 'gross_savings'
         , 'tax_receipts_corp'
         , 'fed_funds_rate'
-        , 'gold_fix_3pm'
-        , 'corp_profit_margins'
-        , 'cape'
-        , 'tobin_q'
+        # , 'gold_fix_3pm'
+        # , 'corp_profit_margins'
+        # , 'cape'
+        # , 'tobin_q'
     ]
 
     ##########################################################################################################
