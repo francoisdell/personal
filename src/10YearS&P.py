@@ -1253,7 +1253,7 @@ if do_predict_returns:
                                              y_field_name=sp_field_name,
                                              years_forward=yf,
                                              model_set=model_set,
-                                             prune=True)
+                                             prune=True):
                 for k, v in d.items():
                     df[k] = v
 
