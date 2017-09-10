@@ -35,9 +35,9 @@ rawdata_from_file = True  # Whether to load the raw data (pre-transformations) f
 finaldata_from_file = False  # Whether to load the final data (post-transformations) from a pickle file
 
 # Do you want to predict returns? Or Recessions?
-do_predict_returns = False
+do_predict_returns = True
 returns_predict_years_forward = [9, 10]
-do_predict_recessions = True
+do_predict_recessions = False
 recession_predict_years_forward = [2]
 
 # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
@@ -66,58 +66,35 @@ stack_include_preds = False
 final_include_data = False
 
 
-initial_models=['logit','etree_c','pass_agg_c','nearest_centroid','bernoulli_nb','gbc','svc','bernoulli_nb','ridge_c']
-if pca_variance < 1.:
-    initial_models.extend(['neural_c','gauss_proc_c'])
+if do_predict_recessions:
+    initial_models=['logit','etree_c','pass_agg_c','nearest_centroid','bernoulli_nb','gbc','svc','bernoulli_nb','ridge_c']
+    if pca_variance < 1.:
+        initial_models.extend(['neural_c','gauss_proc_c'])
 
-# BEST MODELS: logit, svc, sgd_c, neural_c, gauss_proc_c
-# Overall best model: svc???
-final_models=['logit','svc','sgd_c']
-if (not final_include_data) or pca_variance < 1.:
-    final_models.extend(['neural_c','gauss_proc_c'])
+    # BEST MODELS: logit, svc, sgd_c, neural_c, gauss_proc_c
+    # Overall best model: svc???
+    final_models=['logit','svc','sgd_c']
+    if (not final_include_data) or pca_variance < 1.:
+        final_models.extend(['neural_c','gauss_proc_c'])
 
-recession_models = [
-                   ModelSet(final_models=final_models, initial_models=initial_models)
-                    # ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','neural_c','gauss_proc_c'],
-                    #             initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc'])
-                  # ,['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr:   ||  3yr:
-                  # ,['sgd_c','knn_c','bernoulli_nb','rfor','gbc','pass_agg_c','logit','svc','etree_c','nearest_centroid']  # 2yr:   ||  3yr:
-                  # ,['sgd_c','knn_c','gbc','pass_agg_c','rfor','logit','svc','nearest_centroid','etree_c','bernoulli_nb']  # 2yr:   ||  3yr:
-                  # ,['sgd_c','gbc','pass_agg_c','logit','svc','rfor','nearest_centroid','bernoulli_nb','etree_c','knn_c']  # 2yr:   ||  3yr:
-                  # ,['sgd_c','svc','logit','rfor','knn_c','bernoulli_nb','nearest_centroid','gbc','pass_agg_c','etree_c']  # 2yr:   ||  3yr:
-                  # ,['sgd_c','svc','logit','knn_c','bernoulli_nb','nearest_centroid','pass_agg_c','rfor','etree_c','gbc']  # 2yr:   ||  3yr:
-                  ]
+    recession_models = [
+                       ModelSet(final_models=final_models, initial_models=initial_models)
+                        # ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','neural_c','gauss_proc_c'],
+                        #             initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc'])
+                      ]
 
-## INTERESTING @ 2 YEARS
-# recession_models = [
-#                   ['abc','neural_c','knn_c','sgd_c','bernoulli_nb','nearest_centroid','pass_agg_c','gbc']
-#                   ]
+if do_predict_returns:
+    initial_models = ['rfor_r','gbr','pass_agg_r','elastic_net','knn_r','ridge','svr']
+    if pca_variance < 1.:
+        initial_models.extend(['neural_r','gauss_proc_r'])
 
-# recession_models = ['gbc',
-#                   'abc',
-#                   'neural_c',
-#                   'knn_c',
-#                   'sgd_c',
-#                   'pass_agg_c',
-#                   'bernoulli_nb',
-#                   'nearest_centroid',
-#                   'ridge_c',
-#                   ['gbc','abc','knn_c','sgd_c','pass_agg_c','bernoulli_nb','nearest_centroid','neural_c']
-#                   ]
+    final_models = ['elastic_net','ridge','svr','gbr','pass_agg_r','elastic_net_stacking']
+    if (not final_include_data) or pca_variance < 1.:
+        final_models.extend(['neural_r','gauss_proc_r'])
 
-returns_models = [
-                # 'knn_r',
-                # 'elastic_net_stacking',
-                # 'gbr',
-                # 'neural_r',
-                # 'ridge'
-                 ['rfor_r','svr','sgd_r','gbr','neural_r','pass_agg_r','elastic_net','knn_r','ridge']  # 5yr: 0
-                ,['rfor_r','sgd_r','gbr','neural_r','pass_agg_r','elastic_net','knn_r','ridge','svr']  # 5yr: 0
-                ,['rfor_r','svr','gbr','neural_r','pass_agg_r','elastic_net','knn_r','ridge','sgd_r']  # 5yr: 0
-                ,['rfor_r','svr','sgd_r','gbr','neural_r','elastic_net','knn_r','ridge','pass_agg_r']  # 5yr: 0
-                ,['rfor_r','svr','sgd_r','gbr','neural_r','pass_agg_r','knn_r','ridge','elastic_net']  # 5yr: 0
-                ,['rfor_r','svr','sgd_r','gbr','pass_agg_r','knn_r','ridge','elastic_net','neural_r']  # 5yr: 0
-                ]
+    returns_models = [
+                    ModelSet(final_models=final_models, initial_models=initial_models)
+                    ]
 
 if real:
     sp_field_name += '_real'
@@ -265,8 +242,13 @@ def reverse_enumerate(l):
    for index in reversed(range(len(l))):
       yield index, l[index]
 
-def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, model_name: Union[str, list]
-                    , years_forward: int, prune: bool=False) -> (OrderedDict, str):
+def predict_returns(df: pd.DataFrame,
+                    x_names: list,
+                    y_field_name: str,
+                    model_set: ModelSet,
+                    years_forward: int,
+                    prune: bool=False)\
+        -> (OrderedDict, str):
 
     print("\n-----------------------"
           "\n   YEARS FORWARD: {0} "
@@ -294,13 +276,12 @@ def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, model_na
     #################################
     y_field = OrderedDict([(forward_y_field_name, 'num')])
     x_fields = OrderedDict([(v, 'num') for v in x_names])
-    if isinstance(model_name, str):
-        models = [model_name]
-    report_name = 'returns_{0}yr_{1}'.format(years_forward, model_name[0] if len(model_name) == 1 else 'stacked')
+
+    report_name = 'returns_{0}yr_{1}'.format(years_forward, model_set)
     m = Model_Builder(df
                     , x_fields=x_fields
                     , y_field=y_field
-                    , model_type=model_name
+                    , model_type=model_set
                     , report_name=report_name
                     , show_model_tests=True
                     , retrain_model=True
@@ -311,110 +292,95 @@ def predict_returns(df: pd.DataFrame, x_names: list, y_field_name: str, model_na
                     , random_train_test=False
                     , stack_include_preds=stack_include_preds
                     , final_include_data=final_include_data)
-    df = m.predict()
 
-    forward_y_field_name_pred = 'pred_' + forward_y_field_name
-    #################################
+    for df, final_model_name in m.predict():
 
-    invest_amt_per_qtr = 5000
-    df['invest_strat_cash'] = invest_amt_per_qtr
-    df['invest_strat_basic'] = invest_amt_per_qtr
-    df['invest_strat_mixed'] = invest_amt_per_qtr
-    df['invest_strat_equity'] = invest_amt_per_qtr
-    df['invest_strat_tsy'] = invest_amt_per_qtr
+        forward_y_field_name_pred = 'pred_' + forward_y_field_name
+        #################################
 
-    mean_y_field_return = df[forward_y_field_name].mean()
+        invest_amt_per_qtr = 5000
+        df['invest_strat_cash'] = invest_amt_per_qtr
+        df['invest_strat_basic'] = invest_amt_per_qtr
+        df['invest_strat_mixed'] = invest_amt_per_qtr
+        df['invest_strat_equity'] = invest_amt_per_qtr
+        df['invest_strat_tsy'] = invest_amt_per_qtr
 
-    for i in range(df.shape[0] - years_forward * 4):
-        df.ix[i + (4 * years_forward), 'invest_strat_cash'] += df.ix[i, 'invest_strat_cash']
+        mean_y_field_return = df[forward_y_field_name].mean()
 
-        if mean_y_field_return >= df.ix[i, 'tsy_10yr_yield']:
-            df.ix[i + (4 * years_forward), 'invest_strat_basic'] += df.ix[i, 'invest_strat_basic'] * (1 + df.ix[
+        for i in range(df.shape[0] - years_forward * 4):
+            df.ix[i + (4 * years_forward), 'invest_strat_cash'] += df.ix[i, 'invest_strat_cash']
+
+            if mean_y_field_return >= df.ix[i, 'tsy_10yr_yield']:
+                df.ix[i + (4 * years_forward), 'invest_strat_basic'] += df.ix[i, 'invest_strat_basic'] * (1 + df.ix[
+                    i, forward_y_field_name]) ** years_forward
+            else:
+                df.ix[i + (4 * years_forward), 'invest_strat_basic'] += df.ix[i, 'invest_strat_basic'] * (1 + df.ix[
+                    i, 'tsy_10yr_yield']) ** years_forward
+
+            if df.ix[i, forward_y_field_name_pred] >= df.ix[i, 'tsy_10yr_yield']:
+                df.ix[i + (4 * years_forward), 'invest_strat_mixed'] += df.ix[i, 'invest_strat_mixed'] * (1 + df.ix[
+                    i, forward_y_field_name]) ** years_forward
+            else:
+                df.ix[i + (4 * years_forward), 'invest_strat_mixed'] += df.ix[i, 'invest_strat_mixed'] * (1 + df.ix[
+                    i, 'tsy_10yr_yield']) ** years_forward
+
+            df.ix[i + (4 * years_forward), 'invest_strat_equity'] += df.ix[i, 'invest_strat_equity'] * (1 + df.ix[
                 i, forward_y_field_name]) ** years_forward
-        else:
-            df.ix[i + (4 * years_forward), 'invest_strat_basic'] += df.ix[i, 'invest_strat_basic'] * (1 + df.ix[
+
+            df.ix[i + (4 * years_forward), 'invest_strat_tsy'] += df.ix[i, 'invest_strat_tsy'] * (1 + df.ix[
                 i, 'tsy_10yr_yield']) ** years_forward
 
-        if df.ix[i, forward_y_field_name_pred] >= df.ix[i, 'tsy_10yr_yield']:
-            df.ix[i + (4 * years_forward), 'invest_strat_mixed'] += df.ix[i, 'invest_strat_mixed'] * (1 + df.ix[
-                i, forward_y_field_name]) ** years_forward
-        else:
-            df.ix[i + (4 * years_forward), 'invest_strat_mixed'] += df.ix[i, 'invest_strat_mixed'] * (1 + df.ix[
-                i, 'tsy_10yr_yield']) ** years_forward
+        df['total_strat_cash'] = df['invest_strat_cash'][train_mask].rolling(window=(years_forward * 4)).sum()
+        df['total_strat_basic'] = df['invest_strat_basic'][train_mask].rolling(window=(years_forward * 4)).sum()
+        df['total_strat_mixed'] = df['invest_strat_mixed'][train_mask].rolling(window=(years_forward * 4)).sum()
+        df['total_strat_equity'] = df['invest_strat_equity'][train_mask].rolling(window=(years_forward * 4)).sum()
+        df['total_strat_tsy'] = df['invest_strat_tsy'][train_mask].rolling(window=(years_forward * 4)).sum()
 
-        df.ix[i + (4 * years_forward), 'invest_strat_equity'] += df.ix[i, 'invest_strat_equity'] * (1 + df.ix[
-            i, forward_y_field_name]) ** years_forward
+        final_return_strat_cash = df['total_strat_cash'][train_mask].iloc[-1]
+        final_return_strat_basic = df['total_strat_basic'][train_mask].iloc[-1]
+        final_return_strat_mixed = df['total_strat_mixed'][train_mask].iloc[-1]
+        final_return_strat_equity = df['total_strat_equity'][train_mask].iloc[-1]
+        final_return_strat_tsy = df['total_strat_tsy'][train_mask].iloc[-1]
 
-        df.ix[i + (4 * years_forward), 'invest_strat_tsy'] += df.ix[i, 'invest_strat_tsy'] * (1 + df.ix[
-            i, 'tsy_10yr_yield']) ** years_forward
+        print('\nFinal Results')
+        print('Cash Strategy: %.2fM' % (final_return_strat_cash / 1000000))
+        print('Basic Strategy: %.2fM' % (final_return_strat_basic / 1000000))
+        print('Mixed Strategy: %.2fM' % (final_return_strat_mixed / 1000000))
+        print('%s: %.2fM' % (y_field_name, final_return_strat_equity / 1000000))
+        print('10Yr Tsy: %.2fM' % (final_return_strat_tsy / 1000000))
 
-    df['total_strat_cash'] = df['invest_strat_cash'][train_mask].rolling(window=(years_forward * 4)).sum()
-    df['total_strat_basic'] = df['invest_strat_basic'][train_mask].rolling(window=(years_forward * 4)).sum()
-    df['total_strat_mixed'] = df['invest_strat_mixed'][train_mask].rolling(window=(years_forward * 4)).sum()
-    df['total_strat_equity'] = df['invest_strat_equity'][train_mask].rolling(window=(years_forward * 4)).sum()
-    df['total_strat_tsy'] = df['invest_strat_tsy'][train_mask].rolling(window=(years_forward * 4)).sum()
+        print('\nModel Comparisons')
+        print('Mixed vs. Cash Strat: %.2f' % (final_return_strat_mixed / final_return_strat_cash))
+        print('Mixed vs. Basic Strat: %.2f' % (final_return_strat_mixed / final_return_strat_basic))
+        print('Mixed vs. Equity Strat: %.2f' % (final_return_strat_mixed / final_return_strat_equity))
+        print('Mixed vs. Treasury Strat: %.2f' % (final_return_strat_mixed / final_return_strat_tsy))
 
-    final_return_strat_cash = df['total_strat_cash'][train_mask].iloc[-1]
-    final_return_strat_basic = df['total_strat_basic'][train_mask].iloc[-1]
-    final_return_strat_mixed = df['total_strat_mixed'][train_mask].iloc[-1]
-    final_return_strat_equity = df['total_strat_equity'][train_mask].iloc[-1]
-    final_return_strat_tsy = df['total_strat_tsy'][train_mask].iloc[-1]
+        forward_y_field_name_pred_fut = forward_y_field_name_pred + '_fut'
+        df[forward_y_field_name_pred_fut] = df[forward_y_field_name_pred].astype(np.float64)
+        df[forward_y_field_name_pred_fut][train_mask] = np.nan
 
-    print('\nFinal Results')
-    print('Cash Strategy: %.2fM' % (final_return_strat_cash / 1000000))
-    print('Basic Strategy: %.2fM' % (final_return_strat_basic / 1000000))
-    print('Mixed Strategy: %.2fM' % (final_return_strat_mixed / 1000000))
-    print('%s: %.2fM' % (y_field_name, final_return_strat_equity / 1000000))
-    print('10Yr Tsy: %.2fM' % (final_return_strat_tsy / 1000000))
+        print(max(df.index))
+        from dateutil.relativedelta import relativedelta
+        df = df.reindex(
+            pd.DatetimeIndex(start=df.index.min(), end=max(df.index) + relativedelta(years=years_forward), freq='1Q'))
 
-    print('\nModel Comparisons')
-    print('Mixed vs. Cash Strat: %.2f' % (final_return_strat_mixed / final_return_strat_cash))
-    print('Mixed vs. Basic Strat: %.2f' % (final_return_strat_mixed / final_return_strat_basic))
-    print('Mixed vs. Equity Strat: %.2f' % (final_return_strat_mixed / final_return_strat_equity))
-    print('Mixed vs. Treasury Strat: %.2f' % (final_return_strat_mixed / final_return_strat_tsy))
+        y_field_name_pred = '{0}_pred'.format(y_field_name)
+        df[y_field_name_pred] = (df[y_field_name] * df[forward_y_field_name_pred].add(1).pow(years_forward)).shift(years_forward * 4)
 
-    forward_y_field_name_pred_fut = forward_y_field_name_pred + '_fut'
-    df[forward_y_field_name_pred_fut] = df[forward_y_field_name_pred].astype(np.float64)
-    df[forward_y_field_name_pred_fut][train_mask] = np.nan
+        report_name = 'returns_{0}yr_{1}_{2}'.format(years_forward, model_set, final_model_name)
 
-    # print('\n===== Head =====\n', df.head(5))
-    # print('\n===== Tail =====\n', df.tail(5))
-    #
-    # if hasattr(rm, 'intercept_'):
-    #     print("Intercept:", rm.intercept_)
-    #
-    # print('==== Final Variables ====\n', np.asarray(x_names, dtype=np.str))
-    #
-    # if hasattr(rm, 'coef_'):
-    #     print("==== Coefficients ====\n", rm.coef_)
-    #
-    # print('==== Score ====\n', rm.score(df.loc[train_mask, x_names].values.reshape(-1, len(x_names))
-    #                                     , df.loc[train_mask, [y_field_name]].values))
-    # scores, p_vals = f_regression(df.loc[train_mask, x_names].values.reshape(-1, len(x_names))
-    #                               , df.loc[train_mask, [y_field_name]].values)
-    # print('==== Scores ====\n', scores)
-    # print('==== P-Values ====\n', p_vals)
+        # if years_forward in [10]:
+        chart(df
+              , ys=[[forward_y_field_name, forward_y_field_name_pred, 'tsy_10yr_yield'], [y_field_name, y_field_name_pred]]
+              , invert=[False, False]
+              , log_scale=[False, True]
+              , save_name='_'.join([forward_y_field_name_pred, report_name, str(years_forward)])
+              , title='_'.join([y_field_name, report_name]))
 
-    print(max(df.index))
-    from dateutil.relativedelta import relativedelta
-    df = df.reindex(
-        pd.DatetimeIndex(start=df.index.min(), end=max(df.index) + relativedelta(years=years_forward), freq='1Q'))
-
-    y_field_name_pred = '{0}_pred'.format(y_field_name)
-    df[y_field_name_pred] = (df[y_field_name] * df[forward_y_field_name_pred].add(1).pow(years_forward)).shift(years_forward * 4)
-
-    # if years_forward in [10]:
-    chart(df
-          , ys=[[forward_y_field_name, forward_y_field_name_pred, 'tsy_10yr_yield'], [y_field_name, y_field_name_pred]]
-          , invert=[False, False]
-          , log_scale=[False, True]
-          , save_name='_'.join([forward_y_field_name_pred, report_name, str(years_forward)])
-          , title='_'.join([y_field_name, report_name]))
-
-    return (OrderedDict(((forward_y_field_name, df[forward_y_field_name])
-        , (forward_y_field_name_pred, df[forward_y_field_name_pred])
-        , (y_field_name_pred, df[y_field_name_pred])))
-        , report_name)
+        yield (OrderedDict(((forward_y_field_name, df[forward_y_field_name])
+            , (forward_y_field_name_pred, df[forward_y_field_name_pred])
+            , (y_field_name_pred, df[y_field_name_pred])))
+            , report_name)
 
 
 
@@ -1282,12 +1248,13 @@ with open(final_data_file, 'wb') as f:
 if do_predict_returns:
     for yf in returns_predict_years_forward:
         for idx, model_list in enumerate(returns_models):
-            d, report_name = predict_returns(df=df, x_names=x_names
-                                , y_field_name=sp_field_name
-                                , years_forward=yf
-                                , model_name=model_list
-                                , prune=True)
-            for k,v in d.items():
+            d, report_name = predict_returns(df=df,
+                                             x_names=x_names,
+                                             y_field_name=sp_field_name,
+                                             years_forward=yf,
+                                             model_set=model_list,
+                                             prune=True)
+            for k, v in d.items():
                 df[k] = v
 
             new_dataset = [v for v in d.values()][-1]
