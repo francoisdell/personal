@@ -1247,18 +1247,18 @@ with open(final_data_file, 'wb') as f:
 
 if do_predict_returns:
     for yf in returns_predict_years_forward:
-        for idx, model_list in enumerate(returns_models):
-            d, report_name = predict_returns(df=df,
+        for idx, model_set in enumerate(returns_models):
+            for d, report_name in predict_returns(df=df,
                                              x_names=x_names,
                                              y_field_name=sp_field_name,
                                              years_forward=yf,
-                                             model_set=model_list,
+                                             model_set=model_set,
                                              prune=True)
-            for k, v in d.items():
-                df[k] = v
+                for k, v in d.items():
+                    df[k] = v
 
-            new_dataset = [v for v in d.values()][-1]
-            new_field_name = 'sp500_{0}_m{1}'.format(report_name, idx)
+                new_dataset = [v for v in d.values()][-1]
+                new_field_name = 'sp500_{0}_m{1}'.format(report_name, idx)
 
 # RECESSION PREDICTIONS
 if do_predict_recessions:
@@ -1269,7 +1269,7 @@ if do_predict_recessions:
                                   , y_field_name=recession_field_name
                                   , years_forward=yf
                                   , model_set=model_set):
-                for k,v in d.items():
+                for k, v in d.items():
                     df[k] = v
 
                 new_dataset = [v for v in d.values()][-1]
