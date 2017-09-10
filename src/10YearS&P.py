@@ -48,8 +48,8 @@ correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlati
 transform_vars = True
 
 # DIMENSION REDUCTION. Recommend you use either PCA or a maximum value for variance. Otherwise the data could get big.
-pca_variance = None  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
-max_var_correlation = 0.7  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
+pca_variance = 1.0  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
+max_var_correlation = 0.8  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -64,10 +64,20 @@ ewm_halflife = 4.2655*2  # Halflife for EWM calculations. 4.2655 corresponds to 
 default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster, if less ideal.
 stack_include_preds = False
 final_include_data = False
+
+
+initial_models=['logit','etree_c','pass_agg_c','nearest_centroid','bernoulli_nb','gbc','svc','bernoulli_nb','ridge_c']
+if pca_variance < 1.:
+    initial_models.extend(['neural_c','gauss_proc_c'])
+
+# BEST MODELS: logit, svc, sgd_c, neural_c, gauss_proc_c
+# Overall best model: svc???
+final_models=['logit','svc','sgd_c']
+if (not final_include_data) or pca_variance < 1.:
+    final_models.extend(['neural_c','gauss_proc_c'])
+
 recession_models = [
-                   ModelSet(final_models=['logit','svc','etree_c'],
-                            initial_models=['logit','svc','etree_c'])
-                    # 'gauss_proc_c'
+                   ModelSet(final_models=final_models, initial_models=initial_models)
                     # ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','neural_c','gauss_proc_c'],
                     #             initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc'])
                   # ,['sgd_c','svc','knn_c','bernoulli_nb','nearest_centroid','gbc','logit','rfor','etree_c','pass_agg_c']  # 2yr:   ||  3yr:
@@ -456,6 +466,7 @@ def predict_recession(df: pd.DataFrame
                         , pca_explained_var=1.0
                         , stack_include_preds=stack_include_preds
                         , final_include_data=final_include_data
+                        , use_test_set=True
                         )
 
     for df, final_model_name in m.predict():
@@ -1060,7 +1071,7 @@ except Exception as e:
             , 'capacity_util_chem'
             # , 'gold_fix_3pm' # Gold price has been generally increasing over the time period. Don't use.
             # , 'fed_funds_rate' # Fed funds rate has been generally declining over the time period. Don't use.
-            # , 'tsy_3m10y_curve'
+            , 'tsy_3m10y_curve'
             , 'industrial_prod'
             # , 'tsy_10yr_minus_fed_funds_rate'
             # , 'tsy_10yr_minus_cpi'
@@ -1094,6 +1105,7 @@ except Exception as e:
     print('Adding x-year diff terms.')
     diff_x_names = [
         'gdp_nom'
+        , 'equity_alloc'
         , 'cpi_urb_nonvol'
         # , 'empl_construction'
         , 'industrial_prod'
@@ -1103,6 +1115,9 @@ except Exception as e:
         , 'med_family_income'
         , 'unempl_rate'
         , 'industrial_prod'
+        , 'tsy_10yr_yield'
+        , 'tsy_5yr_yield'
+        , 'tsy_3mo_yield'
         # , 'tsy_10yr_minus_fed_funds_rate'
         # , 'tsy_10yr_minus_cpi'
         , 'real_med_family_income'
@@ -1115,10 +1130,10 @@ except Exception as e:
         # , 'gross_savings'
         , 'tax_receipts_corp'
         , 'fed_funds_rate'
-        # , 'gold_fix_3pm'
-        # , 'corp_profit_margins'
-        # , 'cape'
-        # , 'tobin_q'
+        , 'gold_fix_3pm'
+        , 'corp_profit_margins'
+        , 'cape'
+        , 'tobin_q'
     ]
 
     ##########################################################################################################
@@ -1127,7 +1142,8 @@ except Exception as e:
     for name in diff_x_names:
         for y in [1]:
             diff_field_name = '{0}_{1}yr_diff'.format(name, y)
-            df[diff_field_name] = shift_x_years(df[name], y)
+            df[diff_field_name] = shift_x_years(df[name].pow(1./2.), y)
+            # df[diff_field_name] = shift_x_years(df[name].apply(np.log, args=(1.5,)), y)
             x_names.append(diff_field_name)
     print('X Names Length: {0}'.format(len(x_names)))
 

@@ -56,9 +56,15 @@ from numbers import Number
 from sklearn import metrics
 import warnings
 from statistics import mean
+import shutil
 
 
 pd.options.mode.chained_assignment = None
+pd.set_option('display.height', 1000)
+pd.set_option('display.width', shutil.get_terminal_size()[0])
+pd.set_option('display.max_rows', 500)
+pd.set_option('display.max_columns', 0)
+pd.set_option('display.max_colwidth', 100)
 
 
 class ModelSet:
@@ -136,30 +142,31 @@ class Model_Builder:
             , pca_explained_var: float=1.0
             , stack_include_preds: bool=True
             , final_include_data: bool=True
-            , cross_val_num: int=3
-            , cross_val_model=None):
+            , cross_val_iters: tuple=(3, 2)
+            , cross_val_model=None
+            , use_test_set: bool=False):
         
         self.df = df
-        self.x_fields=x_fields
-        self.y_field=y_field
-        self.model_type=model_type
-        self.report_name=report_name
-        self.show_model_tests=show_model_tests
-        self.retrain_model=retrain_model
-        self.selection_limit=selection_limit
-        self.predict_all=predict_all
-        self.verbose=verbose
-        self.train_pct=train_pct
-        self.random_train_test=random_train_test
-        self.max_train_data_points=max_train_data_points
-        self.pca_explained_var=pca_explained_var
-        self.stack_include_preds=stack_include_preds
-        self.final_include_data=final_include_data
-        self.cross_val_num=cross_val_num
-        self.cross_val_model=cross_val_model
-        self.use_sparse=True
+        self.x_fields = x_fields
+        self.y_field = y_field
+        self.model_type = model_type
+        self.report_name = report_name
+        self.show_model_tests = show_model_tests
+        self.retrain_model = retrain_model
+        self.selection_limit = selection_limit
+        self.predict_all = predict_all
+        self.verbose = verbose
+        self.train_pct = train_pct
+        self.random_train_test = random_train_test
+        self.max_train_data_points = max_train_data_points
+        self.pca_explained_var = pca_explained_var
+        self.stack_include_preds = stack_include_preds
+        self.final_include_data = final_include_data
+        self.cross_val_iters = cross_val_iters
+        self.cross_val_model = cross_val_model
+        self.use_sparse = True
         self.s = Settings(report_name=report_name)
-
+        self.use_test_set = use_test_set
         
 
     def predict(self) -> pd.DataFrame:
@@ -223,7 +230,7 @@ class Model_Builder:
                             mask_train[idx] = False
                         mask_train_qty += 1
     
-            if self.cross_val_num > 1:
+            if not self.use_test_set:
                 print("Don't need to split the set into train/validate since we're using cross validation.")
                 mask_train = mask_train_test
     
@@ -267,11 +274,12 @@ class Model_Builder:
         y_mappings = self.train_models(self.df[mask_train], self.y_field)
         _, y_train, y_mappings = self.get_vectors(self.df[mask_train], self.y_field, y_mappings, is_y=True)
 
-        x_train, self.x_fields, x_columns, x_mappings = self.get_fields(self.df,
-                                                                        self.x_fields,
-                                                                        y_train,
-                                                                        mask_train,
-                                                                        self.selection_limit)
+        x_train, self.x_fields, x_columns, x_mappings = \
+            self.get_fields(self.df,
+                            self.x_fields,
+                            y_train,
+                            mask_train,
+                            self.selection_limit)
     
         pred_x_fields = dict()
         pred_x_mappings = dict()
@@ -280,15 +288,11 @@ class Model_Builder:
 
         for idx, model in enumerate(self.model_type.initial_models):
 
-            x_train, self.x_fields, x_columns, x_mappings = \
-                self.get_fields(self.df,
-                                self.x_fields,
-                                y_train,
-                                mask_train)
+
 
             model, x_train = self.train_predictive_model(model,
                                                         self.retrain_model,
-                                                        self.cross_val_num,
+                                                        self.cross_val_iters,
                                                         self.cross_val_model,
                                                         x_columns,
                                                         x_train,
@@ -361,12 +365,18 @@ class Model_Builder:
 
                 if self.stack_include_preds:
                     self.x_fields = {**self.x_fields, **new_x_fields}
-                    x_mappings = {**x_mappings, **new_x_mappings}
-                    new_x_columns, new_x_train, x_mappings = self.get_vectors(self.df[mask_train], new_x_fields, x_mappings)
-                    x_columns += new_x_columns
-                    new_x_train = fix_np_nan(new_x_train)
+                    # x_mappings = {**x_mappings, **new_x_mappings}
+                    # new_x_columns, new_x_train, x_mappings = self.get_vectors(self.df[mask_train], new_x_fields, x_mappings)
+                    # x_columns += new_x_columns
+                    # new_x_train = fix_np_nan(new_x_train)
                     # new_x_train = sparse.csc_matrix(np.hstack(new_x_train))
-                    x_train = self.matrix_hstack((x_train, new_x_train), return_sparse=True)
+                    # x_train = self.matrix_hstack((x_train, new_x_train), return_sparse=True)
+                    x_train, self.x_fields, x_columns, x_mappings = \
+                        self.get_fields(self.df,
+                                        self.x_fields,
+                                        y_train,
+                                        mask_train,
+                                        self.selection_limit)
                 else:
                     pred_x_fields = {**pred_x_fields, **new_x_fields}
                     pred_x_mappings = {**pred_x_mappings, **new_x_mappings}
@@ -390,11 +400,12 @@ class Model_Builder:
                 self.get_fields(self.df,
                                 self.x_fields,
                                 y_train,
-                                mask_train)
+                                mask_train,
+                                self.selection_limit)
 
             model, x_train = self.train_predictive_model(model,
                                                         self.retrain_model,
-                                                        self.cross_val_num,
+                                                        self.cross_val_iters,
                                                         self.cross_val_model,
                                                         x_columns,
                                                         x_train,
@@ -810,7 +821,7 @@ class Model_Builder:
     def train_predictive_model(self,
                                model,
                                retrain_model,
-                               cross_val_num,
+                               cross_val_iters,
                                cross_val_model,
                                x_columns,
                                x_train,
@@ -1046,13 +1057,13 @@ class Model_Builder:
                     # grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
                     if not cross_val_model:
                         if hasattr(clf, 'classes_'):
-                            cross_val_model = RepeatedStratifiedKFold(n_splits=cross_val_num, n_repeats=2,
+                            cross_val_model = RepeatedStratifiedKFold(n_splits=cross_val_iters[0], 
+                                                                      n_repeats=cross_val_iters[1],
                                                                       random_state=555)
                         else:
-                            cross_val_model = RepeatedKFold(n_splits=cross_val_num, n_repeats=2,
+                            cross_val_model = RepeatedKFold(n_splits=cross_val_iters[0], 
+                                                            n_repeats=cross_val_iters[1],
                                                             random_state=555)
-                    else:
-                        cross_val_model = cross_val_num
 
                     if 'windows' in platform.system().lower():  # or isinstance(clf,(MLPClassifier, MLPRegressor)):
                         grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=cross_val_model)
