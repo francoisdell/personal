@@ -9,6 +9,7 @@ matplotlib.use('TkAgg')
 import numpy as np
 import pandas as pd
 import quandl
+from Settings import Settings
 import bls
 import operator
 # from matplotlib import rcParams
@@ -30,6 +31,8 @@ import io
 import requests
 import importlib
 
+s = Settings(report_name='10YearS&P')
+
 # Specify whether the data will be loaded from pickle files or recollected fresh from the interwebz
 rawdata_from_file = True  # Whether to load the raw data (pre-transformations) from a pickle file
 finaldata_from_file = False  # Whether to load the final data (post-transformations) from a pickle file
@@ -39,6 +42,7 @@ do_predict_returns = True
 returns_predict_years_forward = [9, 10]
 do_predict_recessions = False
 recession_predict_years_forward = [2]
+do_predict_next_recession = True
 
 # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
 selection_limit = 5.0e-2
@@ -49,7 +53,7 @@ transform_vars = True
 
 # DIMENSION REDUCTION. Recommend you use either PCA or a maximum value for variance. Otherwise the data could get big.
 pca_variance = 1.0  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
-max_var_correlation = 0.8  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
+max_var_correlation = 0.5  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -65,6 +69,14 @@ default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is gene
 stack_include_preds = False
 final_include_data = False
 
+if do_predict_next_recession:
+    initial_models = ['rfor_r','gbr','elastic_net','knn_r','svr']
+    if pca_variance < 1.:
+        initial_models.extend(['neural_r','gauss_proc_r'])
+
+    final_models = ['elastic_net_stacking']
+
+    next_recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
 if do_predict_recessions:
     initial_models=['logit','etree_c','pass_agg_c','nearest_centroid','bernoulli_nb','gbc','svc','bernoulli_nb','ridge_c']
@@ -77,24 +89,21 @@ if do_predict_recessions:
     if (not final_include_data) or pca_variance < 1.:
         final_models.extend(['neural_c','gauss_proc_c'])
 
-    recession_models = [
-                       ModelSet(final_models=final_models, initial_models=initial_models)
-                        # ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','neural_c','gauss_proc_c'],
-                        #             initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc'])
-                      ]
+    recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
+    # recession_models = ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','neural_c','gauss_proc_c'],
+    #                               initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc'])
+
 
 if do_predict_returns:
     initial_models = ['rfor_r','gbr','pass_agg_r','elastic_net','knn_r','ridge','svr']
     if pca_variance < 1.:
         initial_models.extend(['neural_r','gauss_proc_r'])
 
-    final_models = ['elastic_net','ridge','svr','gbr','pass_agg_r','elastic_net_stacking']
+    final_models = ['elastic_net','svr','gbr','elastic_net_stacking']
     if (not final_include_data) or pca_variance < 1.:
         final_models.extend(['neural_r','gauss_proc_r'])
 
-    returns_models = [
-                    ModelSet(final_models=final_models, initial_models=initial_models)
-                    ]
+    returns_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
 if real:
     sp_field_name += '_real'
@@ -230,7 +239,7 @@ def chart(d, ys, invert, log_scale, save_name=None, title=None):
     else:
         plt.title(list(itertools.chain(*ys))[0])
     if save_name:
-        fig.savefig(save_name)
+        fig.savefig('{0}/{1}'.format(s.get_reports_dir(), save_name))
     print("Showing Plot...")
     plt.show()
 
@@ -291,7 +300,8 @@ def predict_returns(df: pd.DataFrame,
                     , train_pct=train_pct
                     , random_train_test=False
                     , stack_include_preds=stack_include_preds
-                    , final_include_data=final_include_data)
+                    , final_include_data=final_include_data
+                    , use_test_set=True)
 
     for df, final_model_name in m.predict():
 
@@ -469,6 +479,96 @@ def predict_recession(df: pd.DataFrame
             , (y_field_name_pred, df[y_field_name_pred])))
             , report_name)
 
+
+def predict_recession_time(df: pd.DataFrame,
+                           x_names: list,
+                           y_field_name: str,
+                           model_set: ModelSet)\
+        -> (OrderedDict, str):
+
+    train_mask = ~df[y_field_name].isnull()
+
+    for v in x_names:
+        if not np.isfinite(df[v]).all() or not np.isfinite(df[v].sum()):
+            print('Found Series with non-finite values:{0}'.format(v))
+            print(*df[v].values, sep='\n')
+            raise Exception("Can't proceed until you fix the Series.")
+
+    #################################
+    # USING THE MODEL BUILDER CLASS #
+    #################################
+    y_field = OrderedDict([(y_field_name, 'num')])
+    x_fields = OrderedDict([(v, 'num') for v in x_names])
+
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+    # Generate all different combinations of p, q and q triplets
+    # Generate all different combinations of seasonal p, q and q triplets
+
+    p = d = q = range(0, 2)
+    pdq = list(itertools.product(p, d, q))
+    seasonal_pdq = [(x[0], x[1], x[2], 4) for x in list(itertools.product(p, d, q))]
+
+    arima_rows = ~df[y_field_name].isnull()
+    for param in pdq:
+        for param_seasonal in seasonal_pdq:
+            try:
+                mod = SARIMAX(endog=df.loc[arima_rows, y_field_name],
+                              exog=df.loc[arima_rows, x_names],
+                              order=param,
+                              seasonal_order=param_seasonal,
+                              enforce_stationarity=False,
+                              enforce_invertibility=False)
+
+                results = mod.fit()
+
+                print('ARIMA{}x{}12 - AIC:{}'.format(param, param_seasonal, results.aic))
+            except Exception as e:
+                continue
+
+    from statsmodels.tsa.arima_model import ARIMA
+    arima_fit = ARIMA(df[y_field_name], (1, 0, 1), df[x_names]).fit()
+    arima_preds = df.loc[:, y_field_name] = arima_fit.predict()
+    print(arima_preds)
+    report_name = 'recession_date_{0}'.format(model_set)
+    m = Model_Builder(df
+                    , x_fields=x_fields
+                    , y_field=y_field
+                    , model_type=model_set
+                    , report_name=report_name
+                    , show_model_tests=True
+                    , retrain_model=True
+                    , selection_limit=selection_limit
+                    , predict_all=True
+                    , verbose=verbose
+                    , train_pct=train_pct
+                    , random_train_test=False
+                    , stack_include_preds=stack_include_preds
+                    , final_include_data=final_include_data
+                    , use_test_set=True
+                    , auto_reg_periods=1)
+
+    for df, final_model_name in m.predict():
+
+        y_field_name_pred = 'pred_' + y_field_name
+        #################################
+
+        y_field_name_pred_fut = y_field_name_pred + '_fut'
+        df[y_field_name_pred_fut] = df[y_field_name_pred].astype(np.float64)
+        df[y_field_name_pred_fut][train_mask] = np.nan
+
+        # if years_forward in [10]:
+        chart(df
+              , ys=[['sp500'], [y_field_name, y_field_name_pred, 'tsy_10yr_yield']]
+              , invert=[False, False]
+              , log_scale=[True, False]
+              , save_name='_'.join([y_field_name_pred, report_name])
+              , title='_'.join([y_field_name, report_name]))
+
+        yield (OrderedDict(((y_field_name, df[y_field_name])
+            , (y_field_name_pred, df[y_field_name_pred])))
+            , report_name)
+
+
 def decimal_to_date(d: str):
     year = int(float(d))
     frac = float(d) - year
@@ -632,8 +732,8 @@ def get_diff_std_and_flags(df: pd.DataFrame
     new_name_diff_std = new_name_prefix + '_diff_std'
     new_name_add_std = new_name_prefix + '_add_std'
     new_name_sub_std = new_name_prefix + '_sub_std'
-    new_name_trend_fall = new_name_prefix + '_trend_fall_flag'
     new_name_trend_rise = new_name_prefix + '_trend_rise_flag'
+    new_name_trend_fall = new_name_prefix + '_trend_fall_flag'
 
     df[new_name_diff] = df[field_name] - df[ewma_field_name]
     df[new_name_diff_std] = df.groupby(by=[groupby_fields])[new_name_diff].apply(lambda x: x.ewm(halflife=halflife).std(bias=False))
@@ -886,6 +986,7 @@ data_sources['nonfin_networth'] = data_source('TNWMVBSNNCB', 'fred')
 data_sources['nonfin_pretax_profit'] = data_source('NFCPATAX', 'fred')
 
 data_sources['recession_usa'] = data_source('USREC', 'fred')
+
 ds_names = [k for k in data_sources.keys()]
 
 raw_data_file = 'sp500_hist.p'
@@ -959,8 +1060,6 @@ except Exception as e:
     df['tsy_3m10y_curve'] = df['tsy_3mo_yield'] / df['tsy_10yr_yield']
     df['tobin_q'] = [math.sqrt(x * y) for x, y in df.loc[:,['nonfin_equity','nonfin_networth']].values]  # geom mean
     df['corp_profit_margins'] = df['nonfin_pretax_profit'] / df['gdp_nom']
-
-
 
     if do_predict_returns:
         # FULL LIST FOR LINEAR REGRESSION
@@ -1212,11 +1311,31 @@ except Exception as e:
     # Derive special predictor variables
     ##########################################################################################################
     print('Deriving special predictor variables.')
+
+    # Add x-variables for time since the last rise, and time since the last fall, in the SP500
     df, new_x_names = get_diff_std_and_flags(df, 'sp500')
     # x_names.extend(new_x_names)
-    sp500_qtr_since_last_corr = 'sp500_qtr_since_last_corr'
-    df[sp500_qtr_since_last_corr] = time_since_last_true(df[new_x_names[-1]])
-    x_names.append(sp500_qtr_since_last_corr)
+    sp500_qtr_since_rise = 'sp500_time_since_prev_rise'
+    df[sp500_qtr_since_rise] = time_since_last_true(df[new_x_names[-2]])
+    x_names.append(sp500_qtr_since_rise)
+    sp500_qtr_since_fall = 'sp500_time_since_prev_fall'
+    df[sp500_qtr_since_fall] = time_since_last_true(df[new_x_names[-1]])
+    x_names.append(sp500_qtr_since_fall)
+
+    # Add x-variable for time since the last recession. Create y-variable for time until the next recession.
+    last_rec = -1
+    prev_rec_field_name = 'recession_usa_time_since_prev'
+    next_rec_field_name = 'recession_usa_time_until_next'
+    for idx, val in enumerate(df.index.values):
+        rec_val = df.get_value(val, 'recession_usa')
+        if rec_val == 1:
+            for i, v in enumerate(df.iloc[last_rec:idx, :].index.values):
+                df.set_value(v, next_rec_field_name, idx - last_rec - i)
+            last_rec = idx
+            df.set_value(val, prev_rec_field_name, 0)
+        elif rec_val == 0:
+            df.set_value(val, prev_rec_field_name, idx - last_rec)
+    x_names.append(prev_rec_field_name)
 
     ##########################################################################################################
     # Finally, remove any highly correlated items from the regression, to reduce issues with the model
@@ -1245,35 +1364,45 @@ print('Dumping final dataset (post-transformations) to pickle file [{0}]'.format
 with open(final_data_file, 'wb') as f:
     pickle.dump((df, x_names), f)
 
+# Predict the number of quarters until the next recession
+if do_predict_next_recession:
+    for d, report_name in predict_recession_time(df=df,
+                                                 x_names=x_names,
+                                                 y_field_name=next_rec_field_name,
+                                                 model_set=next_recession_models):
+        for k, v in d.items():
+            df[k] = v
+        new_dataset = [v for v in d.values()][-1]
+        # new_field_name = 'next_recession_{0}'.format(report_name)
+        x_names.append([v for v in d.keys()][-1])
+
 if do_predict_returns:
     for yf in returns_predict_years_forward:
-        for idx, model_set in enumerate(returns_models):
-            for d, report_name in predict_returns(df=df,
-                                             x_names=x_names,
-                                             y_field_name=sp_field_name,
-                                             years_forward=yf,
-                                             model_set=model_set,
-                                             prune=True):
-                for k, v in d.items():
-                    df[k] = v
+        for d, report_name in predict_returns(df=df,
+                                              x_names=x_names,
+                                              y_field_name=sp_field_name,
+                                              years_forward=yf,
+                                              model_set=returns_models,
+                                              prune=True):
+            for k, v in d.items():
+                df[k] = v
 
-                new_dataset = [v for v in d.values()][-1]
-                new_field_name = 'sp500_{0}_m{1}'.format(report_name, idx)
+            new_dataset = [v for v in d.values()][-1]
+            new_field_name = 'sp500_{0}'.format(report_name)
 
 # RECESSION PREDICTIONS
 if do_predict_recessions:
     for yf in recession_predict_years_forward:
-        for idx, model_set in enumerate(recession_models):
-            for d, report_name in predict_recession(df=df
-                                  , x_names=x_names
-                                  , y_field_name=recession_field_name
-                                  , years_forward=yf
-                                  , model_set=model_set):
-                for k, v in d.items():
-                    df[k] = v
+        for d, report_name in predict_recession(df=df,
+                                                x_names=x_names,
+                                                y_field_name=recession_field_name,
+                                                years_forward=yf,
+                                                model_set=recession_models):
+            for k, v in d.items():
+                df[k] = v
 
-                new_dataset = [v for v in d.values()][-1]
-                new_field_name = '{0}_m{1}'.format(report_name, idx)
+            new_dataset = [v for v in d.values()][-1]
+            new_field_name = 'recession_{0}'.format(report_name)
 
 
 

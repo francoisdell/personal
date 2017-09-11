@@ -144,7 +144,8 @@ class Model_Builder:
             , final_include_data: bool=True
             , cross_val_iters: tuple=(3, 2)
             , cross_val_model=None
-            , use_test_set: bool=False):
+            , use_test_set: bool=False
+            , auto_reg_periods: int=0):
         
         self.df = df
         self.x_fields = x_fields
@@ -167,7 +168,7 @@ class Model_Builder:
         self.use_sparse = True
         self.s = Settings(report_name=report_name)
         self.use_test_set = use_test_set
-        
+        self.auto_reg_periods = auto_reg_periods
 
     def predict(self) -> pd.DataFrame:
     
@@ -262,7 +263,17 @@ class Model_Builder:
             print(e)
         else:
             retrain_model = True
-    
+
+        # If autoregression has been requested, add the autoregression varibales
+        # if self.auto_reg_periods > 0:
+        #     for y_field, y_type in self.y_field.items():
+        #         for lag in range(self.auto_reg_periods):
+        #             y_field_lag_name = y_field + '_lag{0}'.format(lag+1)
+        #             self.df[y_field_lag_name] = self.df[y_field].shift(lag-1)
+        #             if np.isnan(self.df[y_field_lag_name].iloc[0]):
+        #                 self.df[y_field_lag_name].iloc[0] = self.df[y_field_lag_name].mean()
+        #             self.x_fields[y_field_lag_name] = y_type
+
         # CHANGE THE 'cat' to a list of all possible values in the y field. This is necessary because the LabelEncoder
         # that will encode the Y variable values can't handle never-before-seen values. So we need to pass it every
         # possible value in the Y variable, regardless of whether it appears in the train or test subsets.
@@ -270,7 +281,6 @@ class Model_Builder:
             if v == 'cat':
                 self.y_field[k] = self.df[k].unique().astype(str)
     
-        data_rows = len(mask_train)
         y_mappings = self.train_models(self.df[mask_train], self.y_field)
         _, y_train, y_mappings = self.get_vectors(self.df[mask_train], self.y_field, y_mappings, is_y=True)
 
@@ -465,7 +475,10 @@ class Model_Builder:
                     else:
                         raise ValueError('No coef_ or coefs_ attrubute in this model. Skipping.')
 
-                    scores, p_vals = sk_feat_sel.f_regression(x_test, y_test, center=False)
+                    if len(np.unique(y_test)) == 2:
+                        scores, p_vals = sk_feat_sel.f_classif(x_test, y_test)
+                    else:
+                        scores, p_vals = sk_feat_sel.f_regression(x_test, y_test, center=False)
 
                     nonzero_coefs_mask = [v != 0 for v in coefs]
                     significant_coefs_mask = [v <= self.selection_limit for v in p_vals]
@@ -508,26 +521,21 @@ class Model_Builder:
                     print(e)
                     pass
 
-                # scores, pvalues = chi2(x_test, y_test)
-                scores2, pvalues2 = sk_feat_sel.f_regression(x_test, y_test, center=False)
-                scores2 = ['linreg_scores'] + scores2.tolist()
-                pvalues2 = ['linreg_pvalues'] + pvalues2.tolist()
-                coef_list.append(scores2)
-                coef_list.append(pvalues2)
+                if len(np.unique(y_test)) == 2:
+                    scores, p_vals = sk_feat_sel.f_classif(x_test, y_test)
+                else:
+                    scores, p_vals = sk_feat_sel.f_regression(x_test, y_test, center=False)
 
-                scores3, pvalues3 = sk_feat_sel.f_classif(x_test, y_test)
-                scores3 = ['classif_scores'] + scores3.tolist()
-                pvalues3 = ['classif_pvalues'] + pvalues3.tolist()
-                coef_list.append(scores3)
-                coef_list.append(pvalues3)
+                scores = ['scores'] + scores.tolist()
+                p_vals = ['p_values'] + p_vals.tolist()
+                coef_list.append(scores)
+                coef_list.append(p_vals)
 
                 coef_list = list(map(list, zip(*coef_list)))
-                # coef_list = coef_list.transpose()
                 for i, r in enumerate(coef_list[1:]):
                     coef_list[i + 1] = [r[0]] + [round(float(v), 4) for v in r[1:]]
 
-                value_mask = [bool(v[1]) for v in x_columns]
-                value_mask_95 = [bool(x_columns[i][1]) and (float(v) <= 0.05) for i, v in enumerate(pvalues2[1:])]
+                value_mask_95 = [bool(x_columns[i][1]) and (float(v) <= 0.05) for i, v in enumerate(p_vals[1:])]
 
                 # print('PREDICTOR VARIABLES')
                 # print(coef_list)
@@ -536,6 +544,7 @@ class Model_Builder:
                 for i, r in enumerate(sorted(coef_list[1:], key=lambda x: x[-1], reverse=False)):
                     if value_mask_95[i]:
                         pp2.add_row(r)
+
                 # print('PREDICTOR VARIABLES SIGNIFICANT AT 95%')
                 # print(pp2.get_string())
 
@@ -630,6 +639,15 @@ class Model_Builder:
                 x_validate = fix_np_nan(x_validate)
 
                 # print(x_validate)
+                # print("Prediciton Matrix Shape: {0}".format(x_validate.shape))
+                # if self.auto_reg_periods > 0:
+                #     preds = []
+                #     x_validate = []
+                #     for r in range(x_validate.shape(0)):
+                #         pred, x_validate_row = self.resilient_predict(clf, x_validate[r:r + 1, :])
+                #         preds.append(preds)
+                #         x_validate.append(x_validate_row)
+                # else:
                 preds, x_validate = self.resilient_predict(clf, x_validate)
 
                 calculate_probs = hasattr(clf, 'classes_') \
@@ -708,7 +726,10 @@ class Model_Builder:
 
         if selection_limit < 1.0:
             print('Pruning x_fields for any variables with a p-value > {0}'.format(selection_limit))
-            scores, p_vals = sk_feat_sel.f_regression(x, y, center=False)
+            if len(np.unique(y)) == 2:
+                scores, p_vals = sk_feat_sel.f_classif(x, y)
+            else:
+                scores, p_vals = sk_feat_sel.f_regression(x, y, center=False)
             for field_name in list(fields.keys()):
                 xcol_indices = [idx for idx, vals in enumerate(columns) if vals[2] == field_name]
                 if all(p_vals[idx] > selection_limit or p_vals[idx] == np.nan for idx in xcol_indices):
