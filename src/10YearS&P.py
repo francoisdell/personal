@@ -113,7 +113,7 @@ if real:
 # safe_funcs = dict([(k, locals().get(k, None)) for k in safe_func_list])
 
 def make_qtrly(s: pd.Series, t: str='mean') -> pd.Series:
-    s.index = pd.DatetimeIndex(s.index.values)
+    s.index = pd.DatetimeIndex(s.index.values, dtype=datetime.date)
     s.index.freq = s.index.inferred_freq
 
     # print(s)
@@ -372,7 +372,10 @@ def predict_returns(df: pd.DataFrame,
         print(max(df.index))
         from dateutil.relativedelta import relativedelta
         df = df.reindex(
-            pd.DatetimeIndex(start=df.index.min(), end=max(df.index) + relativedelta(years=years_forward), freq='1Q'))
+            pd.DatetimeIndex(start=df.index.min(),
+                             end=max(df.index) + relativedelta(years=years_forward),
+                             freq='1Q',
+                             dtype=datetime.date))
 
         y_field_name_pred = '{0}_pred'.format(y_field_name)
         df[y_field_name_pred] = (df[y_field_name] * df[forward_y_field_name_pred].add(1).pow(years_forward)).shift(years_forward * 4)
@@ -453,7 +456,10 @@ def predict_recession(df: pd.DataFrame
         print(max(df.index))
         from dateutil.relativedelta import relativedelta
         df = df.reindex(
-            pd.DatetimeIndex(start=df.index.min(), end=max(df.index) + relativedelta(years=years_forward), freq='1Q'))
+            pd.DatetimeIndex(start=df.index.min(),
+                             end=max(df.index) + relativedelta(years=years_forward),
+                             freq='1Q',
+                             dtype=datetime.date))
 
         y_field_name_pred = '{0}_pred'.format(y_field_name)
         df[y_field_name_pred] = df[forward_y_field_name_pred].shift(years_forward * 4)
@@ -504,16 +510,15 @@ def predict_recession_time(df: pd.DataFrame,
     # Generate all different combinations of p, q and q triplets
     # Generate all different combinations of seasonal p, q and q triplets
 
-    p = d = q = range(0, 2)
+    p = d = q = range(1, 2) # Change to 0, 2
     pdq = list(itertools.product(p, d, q))
     seasonal_pdq = [(x[0], x[1], x[2], 4) for x in list(itertools.product(p, d, q))]
 
-    arima_rows = ~df[y_field_name].isnull()
     for param in pdq:
         for param_seasonal in seasonal_pdq:
             try:
-                mod = SARIMAX(endog=df.loc[arima_rows, y_field_name],
-                              exog=df.loc[arima_rows, x_names],
+                mod = SARIMAX(endog=df.loc[train_mask, y_field_name],
+                              exog=df.loc[train_mask, x_names],
                               order=param,
                               seasonal_order=param_seasonal,
                               enforce_stationarity=False,
@@ -525,10 +530,22 @@ def predict_recession_time(df: pd.DataFrame,
             except Exception as e:
                 continue
 
-    from statsmodels.tsa.arima_model import ARIMA
-    arima_fit = ARIMA(df[y_field_name], (1, 0, 1), df[x_names]).fit()
-    arima_preds = df.loc[:, y_field_name] = arima_fit.predict()
-    print(arima_preds)
+    start = df.loc[train_mask].index[-1]
+    end = df.loc[~train_mask].index[-1]
+    start_pred = pd.DatetimeIndex(df.loc[train_mask].index.shift(1,'Q'),
+                                  dtype=datetime.date)[-1]
+    sarimax_preds = results.get_prediction(start=start,
+                                           end=end,
+                                           exog=df.loc[start_pred:end, x_names],
+                                           dynamic=True)
+    print(sarimax_preds)
+
+    df.loc[sarimax_preds.index.values, y_field_name] = sarimax_preds
+
+    # from statsmodels.tsa.arima_model import ARIMA
+    # arima_fit = ARIMA(df[y_field_name], (1, 0, 1), df[x_names]).fit()
+    # arima_preds = df.loc[:, y_field_name] = arima_fit.predict()
+    # print(arima_preds)
     report_name = 'recession_date_{0}'.format(model_set)
     m = Model_Builder(df
                     , x_fields=x_fields
@@ -936,7 +953,8 @@ def get_nyse_margin_debt() -> pd.Series:
 
     print(df)
 
-    df['End of month'] = pd.DatetimeIndex(pd.to_datetime(df['End of month'])).to_period('M').to_timestamp('M')
+    df['End of month'] = pd.DatetimeIndex(pd.to_datetime(df['End of month']),
+                                          dtype=datetime.date).to_period('M').to_datetime('M')
     df.set_index(['End of month'], inplace=True, drop=True)
     print(df)
 
@@ -1336,6 +1354,10 @@ except Exception as e:
         elif rec_val == 0:
             df.set_value(val, prev_rec_field_name, idx - last_rec)
     x_names.append(prev_rec_field_name)
+
+    df.loc[:, x_names+[next_rec_field_name]] = impute_if_any_nulls(df=df.loc[:, x_names+[next_rec_field_name]],
+                                                                   imputer=default_imputer)
+
 
     ##########################################################################################################
     # Finally, remove any highly correlated items from the regression, to reduce issues with the model
