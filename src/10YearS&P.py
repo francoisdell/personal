@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import quandl
 from Settings import Settings
+import wbdata
 import bls
 import operator
 # from matplotlib import rcParams
@@ -39,10 +40,10 @@ rawdata_from_file = True  # Whether to load the raw data (pre-transformations) f
 finaldata_from_file = False  # Whether to load the final data (post-transformations) from a pickle file
 
 # Do you want to predict returns? Or Recessions?
-do_predict_returns = True
-returns_predict_years_forward = [9, 10, 12]
-do_predict_recessions = False
-recession_predict_years_forward = [2]
+do_predict_returns = False
+returns_predict_quarters_forward = [10]
+do_predict_recessions = True
+recession_predict_quarters_forward = [6]
 do_predict_next_recession = False
 
 # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
@@ -106,7 +107,7 @@ if do_predict_returns:
     if max_variance < 1. or max_variables == 0:
         initial_models.extend(['neural_r','gauss_proc_r'])
 
-    final_models = ['svr','elastic_net_stacking','ridge_r','linreg']
+    final_models = ['elastic_net_stacking','ridge_r','linreg','svr']
     if (not final_include_data) or max_variance < 1. or max_variables == 0:
         final_models.extend(['neural_r','gauss_proc_r'])
 
@@ -262,18 +263,17 @@ def predict_returns(df: pd.DataFrame,
                     x_names: list,
                     y_field_name: str,
                     model_set: ModelSet,
-                    years_forward: int,
-                    prune: bool=False)\
+                    quarters_forward: int)\
         -> (OrderedDict, str):
 
     print("\n-----------------------"
-          "\n   YEARS FORWARD: {0} "
-          "\n-----------------------".format(years_forward))
+          "\n   QUARTERS FORWARD: {0} "
+          "\n-----------------------".format(quarters_forward))
 
-    if years_forward > 0:
-        forward_y_field_name = '{0}_{1}yr'.format(y_field_name, years_forward)
-        df[forward_y_field_name] = 1 - pd.Series(df[y_field_name].shift(years_forward * 4) / df[y_field_name]).pow(
-            1 / float(years_forward)).shift(-years_forward * 4)
+    if quarters_forward > 0:
+        forward_y_field_name = '{0}_{1}yr'.format(y_field_name, quarters_forward)
+        df[forward_y_field_name] = 1 - pd.Series(df[y_field_name].shift(quarters_forward) / df[y_field_name]).pow(
+            1 / float(quarters_forward)).shift(-quarters_forward)
 
     else:
         forward_y_field_name = y_field_name
@@ -293,7 +293,7 @@ def predict_returns(df: pd.DataFrame,
     y_field = OrderedDict([(forward_y_field_name, 'num')])
     x_fields = OrderedDict([(v, 'num') for v in x_names])
 
-    report_name = 'returns_{0}yr_{1}'.format(years_forward, model_set)
+    report_name = 'returns_{0}yr_{1}'.format(quarters_forward, model_set)
     m = Model_Builder(df
                     , x_fields=x_fields
                     , y_field=y_field
@@ -324,34 +324,34 @@ def predict_returns(df: pd.DataFrame,
 
         mean_y_field_return = df[forward_y_field_name].mean()
 
-        for i in range(df.shape[0] - years_forward * 4):
-            df.ix[i + (4 * years_forward), 'invest_strat_cash'] += df.ix[i, 'invest_strat_cash']
+        for i in range(df.shape[0] - quarters_forward):
+            df.ix[i + (quarters_forward), 'invest_strat_cash'] += df.ix[i, 'invest_strat_cash']
 
             if mean_y_field_return >= df.ix[i, 'tsy_10yr_yield']:
-                df.ix[i + (4 * years_forward), 'invest_strat_basic'] += df.ix[i, 'invest_strat_basic'] * (1 + df.ix[
-                    i, forward_y_field_name]) ** years_forward
+                df.ix[i + (quarters_forward), 'invest_strat_basic'] += df.ix[i, 'invest_strat_basic'] * (1 + df.ix[
+                    i, forward_y_field_name]) ** quarters_forward
             else:
-                df.ix[i + (4 * years_forward), 'invest_strat_basic'] += df.ix[i, 'invest_strat_basic'] * (1 + df.ix[
-                    i, 'tsy_10yr_yield']) ** years_forward
+                df.ix[i + (quarters_forward), 'invest_strat_basic'] += df.ix[i, 'invest_strat_basic'] * (1 + df.ix[
+                    i, 'tsy_10yr_yield']) ** quarters_forward
 
             if df.ix[i, forward_y_field_name_pred] >= df.ix[i, 'tsy_10yr_yield']:
-                df.ix[i + (4 * years_forward), 'invest_strat_mixed'] += df.ix[i, 'invest_strat_mixed'] * (1 + df.ix[
-                    i, forward_y_field_name]) ** years_forward
+                df.ix[i + (quarters_forward), 'invest_strat_mixed'] += df.ix[i, 'invest_strat_mixed'] * (1 + df.ix[
+                    i, forward_y_field_name]) ** quarters_forward
             else:
-                df.ix[i + (4 * years_forward), 'invest_strat_mixed'] += df.ix[i, 'invest_strat_mixed'] * (1 + df.ix[
-                    i, 'tsy_10yr_yield']) ** years_forward
+                df.ix[i + (quarters_forward), 'invest_strat_mixed'] += df.ix[i, 'invest_strat_mixed'] * (1 + df.ix[
+                    i, 'tsy_10yr_yield']) ** quarters_forward
 
-            df.ix[i + (4 * years_forward), 'invest_strat_equity'] += df.ix[i, 'invest_strat_equity'] * (1 + df.ix[
-                i, forward_y_field_name]) ** years_forward
+            df.ix[i + (quarters_forward), 'invest_strat_equity'] += df.ix[i, 'invest_strat_equity'] * (1 + df.ix[
+                i, forward_y_field_name]) ** quarters_forward
 
-            df.ix[i + (4 * years_forward), 'invest_strat_tsy'] += df.ix[i, 'invest_strat_tsy'] * (1 + df.ix[
-                i, 'tsy_10yr_yield']) ** years_forward
+            df.ix[i + (quarters_forward), 'invest_strat_tsy'] += df.ix[i, 'invest_strat_tsy'] * (1 + df.ix[
+                i, 'tsy_10yr_yield']) ** quarters_forward
 
-        df['total_strat_cash'] = df['invest_strat_cash'][train_mask].rolling(window=(years_forward * 4)).sum()
-        df['total_strat_basic'] = df['invest_strat_basic'][train_mask].rolling(window=(years_forward * 4)).sum()
-        df['total_strat_mixed'] = df['invest_strat_mixed'][train_mask].rolling(window=(years_forward * 4)).sum()
-        df['total_strat_equity'] = df['invest_strat_equity'][train_mask].rolling(window=(years_forward * 4)).sum()
-        df['total_strat_tsy'] = df['invest_strat_tsy'][train_mask].rolling(window=(years_forward * 4)).sum()
+        df['total_strat_cash'] = df['invest_strat_cash'][train_mask].rolling(window=(quarters_forward)).sum()
+        df['total_strat_basic'] = df['invest_strat_basic'][train_mask].rolling(window=(quarters_forward)).sum()
+        df['total_strat_mixed'] = df['invest_strat_mixed'][train_mask].rolling(window=(quarters_forward)).sum()
+        df['total_strat_equity'] = df['invest_strat_equity'][train_mask].rolling(window=(quarters_forward)).sum()
+        df['total_strat_tsy'] = df['invest_strat_tsy'][train_mask].rolling(window=(quarters_forward)).sum()
 
         final_return_strat_cash = df['total_strat_cash'][train_mask].iloc[-1]
         final_return_strat_basic = df['total_strat_basic'][train_mask].iloc[-1]
@@ -380,21 +380,21 @@ def predict_returns(df: pd.DataFrame,
         from dateutil.relativedelta import relativedelta
         df = df.reindex(
             pd.DatetimeIndex(start=df.index.min(),
-                             end=max(df.index) + relativedelta(years=years_forward),
+                             end=max(df.index) + relativedelta(months=quarters_forward*3),
                              freq='1Q',
                              dtype=datetime.date))
 
         y_field_name_pred = '{0}_pred'.format(y_field_name)
-        df[y_field_name_pred] = (df[y_field_name] * df[forward_y_field_name_pred].add(1).pow(years_forward)).shift(years_forward * 4)
+        df[y_field_name_pred] = (df[y_field_name] * df[forward_y_field_name_pred].add(1).pow(quarters_forward)).shift(quarters_forward)
 
-        report_name = 'returns_{0}yr_{1}_{2}'.format(years_forward, model_set, final_model_name)
+        report_name = 'returns_{0}yr_{1}_{2}'.format(quarters_forward, model_set, final_model_name)
 
-        # if years_forward in [10]:
+        # if quarters_forward in [10]:
         chart(df
               , ys=[[forward_y_field_name, forward_y_field_name_pred, 'tsy_10yr_yield'], [y_field_name, y_field_name_pred]]
               , invert=[False, False]
               , log_scale=[False, True]
-              , save_name='_'.join([forward_y_field_name_pred, report_name, str(years_forward)])
+              , save_name='_'.join([forward_y_field_name_pred, report_name, str(quarters_forward)])
               , title='_'.join([y_field_name, report_name]))
 
         yield (OrderedDict(((forward_y_field_name, df[forward_y_field_name])
@@ -407,17 +407,17 @@ def predict_returns(df: pd.DataFrame,
 def predict_recession(df: pd.DataFrame
                       , x_names: list
                       , y_field_name: str
-                      , years_forward: int
+                      , quarters_forward: int
                       , model_set: ModelSet)\
         -> (OrderedDict, str):
 
     print("\n-----------------------"
-          "\n   YEARS FORWARD: {0} "
-          "\n-----------------------".format(years_forward))
+          "\n   QUARTERS FORWARD: {0} "
+          "\n-----------------------".format(quarters_forward))
 
-    if years_forward > 0:
-        forward_y_field_name = '{0}_{1}yr'.format(y_field_name, years_forward)
-        df[forward_y_field_name] = df[y_field_name].shift(-years_forward * 4)
+    if quarters_forward > 0:
+        forward_y_field_name = '{0}_{1}yr'.format(y_field_name, quarters_forward)
+        df[forward_y_field_name] = df[y_field_name].shift(-quarters_forward)
 
     else:
         forward_y_field_name = y_field_name
@@ -435,7 +435,7 @@ def predict_recession(df: pd.DataFrame
     y_field = OrderedDict([(forward_y_field_name, 'cat')])
     x_fields = OrderedDict([(v, 'num') for v in x_names])
 
-    report_name = 'recession_{0}yr_{1}'.format(years_forward, model_set)
+    report_name = 'recession_{0}yr_{1}'.format(quarters_forward, model_set)
 
     m = Model_Builder(df
                         , x_fields=x_fields
@@ -464,22 +464,22 @@ def predict_recession(df: pd.DataFrame
         from dateutil.relativedelta import relativedelta
         df = df.reindex(
             pd.DatetimeIndex(start=df.index.min(),
-                             end=max(df.index) + relativedelta(years=years_forward),
+                             end=max(df.index) + relativedelta(months=quarters_forward*3),
                              freq='1Q',
                              dtype=datetime.date))
 
         y_field_name_pred = '{0}_pred'.format(y_field_name)
-        df[y_field_name_pred] = df[forward_y_field_name_pred].shift(years_forward * 4)
+        df[y_field_name_pred] = df[forward_y_field_name_pred].shift(quarters_forward)
         chart_y_field_names = [y_field_name, y_field_name_pred]
 
         y_pred_names = m.new_fields
         y_prob_field_name = '{0}_prob_1.0'.format(forward_y_field_name)
         if y_prob_field_name in y_pred_names:
-            df[y_prob_field_name] = df[y_prob_field_name].shift(years_forward * 4)
+            df[y_prob_field_name] = df[y_prob_field_name].shift(quarters_forward)
             chart_y_field_names += [y_prob_field_name]
 
-        report_name = 'recession_{0}yr_{1}_{2}'.format(years_forward, model_set, final_model_name)
-        # if years_forward in [10]:
+        report_name = 'recession_{0}yr_{1}_{2}'.format(quarters_forward, model_set, final_model_name)
+        # if quarters_forward in [10]:
         chart(df
               , ys=[['sp500'], chart_y_field_names]
               , invert=[False, False]
@@ -558,7 +558,7 @@ def predict_recession_time(df: pd.DataFrame,
     df.loc[sarimax_preds.predicted_mean.index.values, y_field_name_pred] = sarimax_preds.predicted_mean.values
     report_name = 'time_to_next_recession_sarimax'
 
-    # if years_forward in [10]:
+    # if quarters_forward in [10]:
     chart(df
           , ys=[['sp500'], [y_field_name, y_field_name_pred, 'tsy_10yr_yield']]
           , invert=[False, False]
@@ -587,7 +587,7 @@ class data_source:
         self.data = pd.Series()
         self.rerun = rerun
 
-        if provider in ('fred', 'yahoo', 'quandl', 'schiller', 'eod_hist', 'bls'):
+        if provider in ('fred', 'yahoo', 'quandl', 'schiller', 'eod_hist', 'bls', 'worldbank'):
             self.provider = provider
         elif isfunction(provider):
             self.provider = provider
@@ -645,11 +645,22 @@ class data_source:
                                 , endyear=datetime.strptime(end_dt, '%Y-%m-%d').year
                                 , key='3d75f024d5f64d189e5de4b7cbb99730'
                                 )
+        elif self.provider == 'worldbank':
+            self.data = wbdata.get_data(self.code,
+                                        country='US',
+                                        data_date=(datetime.strptime(start_dt, '%Y-%m-%d'),
+                                                   datetime.strptime(end_dt, '%Y-%m-%d')),
+                                        convert_date=True,
+                                        pandas=True,
+                                        keep_levels=False
+                                   )
+            print(self.data)
+            lol=1
         print("Collected data for [{0}]".format(self.code))
 
 
-def shift_x_years(s: pd.Series, y: int):
-    return s / s.shift(4*y)
+def shift_x_quarters(s: pd.Series, y: int):
+    return s / s.shift(y)
 
 
 def impute_if_any_nulls(df, imputer=default_imputer):
@@ -1049,6 +1060,9 @@ data_sources['m1_velocity'] = data_source('M1V', 'fred')
 data_sources['mzm_moneystock'] = data_source('MZMSL', 'fred')
 data_sources['m2_moneystock'] = data_source('M2NS', 'fred')
 data_sources['m1_moneystock'] = data_source('M1NS', 'fred')
+# data_sources['wrk_age_pop_pct'] = data_source('SP.POP.1564.TO.ZS', 'worldbank', rerun=True)
+data_sources['wrk_age_pop'] = data_source('LFWA64TTUSM647N', 'fred')
+data_sources['employment_pop_ratio'] = data_source('EMRATIO', 'fred')
 
 data_sources['recession_usa'] = data_source('USREC', 'fred')
 
@@ -1158,6 +1172,7 @@ except Exception as e:
             , 'mzm_velocity'
             , 'm2_velocity'
             , 'm1_velocity'
+            , 'wrk_age_pop'
         ]
         """
         x_names = [
@@ -1221,6 +1236,7 @@ except Exception as e:
             , 'mzm_velocity'
             , 'm2_velocity'
             , 'm1_velocity'
+            , 'wrk_age_pop'
         ]
 
     empty_cols = [c for c in df.columns.values if all(df[c].isnull())]
@@ -1273,6 +1289,10 @@ except Exception as e:
         , 'mzm_velocity'
         , 'm2_velocity'
         , 'm1_velocity'
+        , 'mzm_moneystock'
+        , 'm1_moneystock'
+        , 'm2_moneystock'
+        , 'employment_pop_ratio'
     ]
 
     ##########################################################################################################
@@ -1281,8 +1301,8 @@ except Exception as e:
     for name in diff_x_names:
         for y in [1]:
             diff_field_name = '{0}_{1}yr_diff'.format(name, y)
-            df[diff_field_name] = shift_x_years(df[name].pow(1./2.), y)
-            # df[diff_field_name] = shift_x_years(df[name].apply(np.log, args=(1.5,)), y)
+            df[diff_field_name] = shift_x_quarters(df[name].pow(1./2.), y)
+            # df[diff_field_name] = shift_x_quarters(df[name].apply(np.log, args=(1.5,)), y)
             x_names.append(diff_field_name)
     print('X Names Length: {0}'.format(len(x_names)))
 
@@ -1291,35 +1311,17 @@ except Exception as e:
     ##########################################################################################################
     df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
 
+    ##########################################################################################################
+    # If even after imputation, some fields are empty, then you need to remove them
+    ##########################################################################################################
+    for n in x_names.copy():
+        if df[n].isnull().any():
+            print('Field [{0}] was still empty after imputation! Removing it!'.format(n))
+            x_names.remove(n)
+
     ################################################################################################################
     # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
     ################################################################################################################
-    if (dimension_method is not None) and max_variables >= 0:
-        if dimension_method == 'corr':
-            x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
-            print('X Names Length: {0}'.format(len(x_names)))
-        elif dimension_method == 'pca':
-            df, x_names = reduce_vars_pca(df=df, field_names=x_names, max_num=max_variables)
-        print('X Names Length: {0}'.format(len(x_names)))
-
-    ##########################################################################################################
-    # Create interaction terms between the various x variables
-    ##########################################################################################################
-    print('Creating direct interaction terms [{0}]'.format(interaction_type))
-    if interaction_type == 'all':
-        new_x_names = []
-        get_all_interactions(x_names)
-        x_names.extend(new_x_names)
-        print('X Names Length: {0}'.format(len(x_names)))
-
-    elif interaction_type == 'level_1':
-        df, inter_x_names = get_level1_interactions(df=df, x_names=x_names)
-        x_names.extend(inter_x_names)
-        print('X Names Length: {0}'.format(len(x_names)))
-
-    ################################################################################################################
-    # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
-    ###############################################################################################################
     if (dimension_method is not None) and max_variables >= 0:
         if dimension_method == 'corr':
             x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
@@ -1367,6 +1369,32 @@ except Exception as e:
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
+    # Create interaction terms between the various x variables
+    ##########################################################################################################
+    print('Creating direct interaction terms [{0}]'.format(interaction_type))
+    if interaction_type == 'all':
+        new_x_names = []
+        get_all_interactions(x_names)
+        x_names.extend(new_x_names)
+        print('X Names Length: {0}'.format(len(x_names)))
+
+    elif interaction_type == 'level_1':
+        df, inter_x_names = get_level1_interactions(df=df, x_names=x_names)
+        x_names.extend(inter_x_names)
+        print('X Names Length: {0}'.format(len(x_names)))
+
+    ################################################################################################################
+    # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
+    ###############################################################################################################
+    if (dimension_method is not None) and max_variables >= 0:
+        if dimension_method == 'corr':
+            x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
+            print('X Names Length: {0}'.format(len(x_names)))
+        elif dimension_method == 'pca':
+            df, x_names = reduce_vars_pca(df=df, field_names=x_names, max_num=max_variables)
+        print('X Names Length: {0}'.format(len(x_names)))
+
+    ##########################################################################################################
     # Create squared and squared-root versions of all the x fields
     ##########################################################################################################
     # Generate all possible combinations of the imput variables.
@@ -1389,6 +1417,17 @@ except Exception as e:
         x_names.extend(corr_x_names)
         # IMPUTE VALUES!!!
         df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+        print('X Names Length: {0}'.format(len(x_names)))
+
+    ################################################################################################################
+    # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
+    ###############################################################################################################
+    if (dimension_method is not None) and max_variables >= 0:
+        if dimension_method == 'corr':
+            x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
+            print('X Names Length: {0}'.format(len(x_names)))
+        elif dimension_method == 'pca':
+            df, x_names = reduce_vars_pca(df=df, field_names=x_names, max_num=max_variables)
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
@@ -1453,7 +1492,7 @@ except Exception as e:
 
 for n in x_names:
     if df[n].isnull().any():
-        msg = 'Field "{0}" has null value!!!!'
+        msg = 'Field "{0}" has null value!!!!'.format(n)
         print(msg)
         raise ValueError(msg)
     if any([np.isinf(v) for v in df[n].tolist()]):
@@ -1470,7 +1509,7 @@ print(*x_names, sep='\n')
 # print(df.tail(5))
 
 # df_valid = df.loc[~train_mask, :]
-# predict_years_forward = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+# predict_quarters_forward = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
 print('Dumping final dataset (post-transformations) to pickle file [{0}]'.format(final_data_file))
 with open(final_data_file, 'wb') as f:
@@ -1489,13 +1528,12 @@ if do_predict_next_recession:
         x_names.append([v for v in d.keys()][-1])
 
 if do_predict_returns:
-    for yf in returns_predict_years_forward:
+    for yf in returns_predict_quarters_forward:
         for d, report_name in predict_returns(df=df,
                                               x_names=x_names,
                                               y_field_name=sp_field_name,
-                                              years_forward=yf,
-                                              model_set=returns_models,
-                                              prune=True):
+                                              quarters_forward=yf,
+                                              model_set=returns_models):
             for k, v in d.items():
                 df[k] = v
 
@@ -1503,11 +1541,11 @@ if do_predict_returns:
 
 # RECESSION PREDICTIONS
 if do_predict_recessions:
-    for yf in recession_predict_years_forward:
+    for yf in recession_predict_quarters_forward:
         for d, report_name in predict_recession(df=df,
                                                 x_names=x_names,
                                                 y_field_name=recession_field_name,
-                                                years_forward=yf,
+                                                quarters_forward=yf,
                                                 model_set=recession_models):
             for k, v in d.items():
                 df[k] = v
