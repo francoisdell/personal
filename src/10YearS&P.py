@@ -28,6 +28,7 @@ from Model_Builder import Model_Builder, ModelSet
 from collections import OrderedDict
 from typing import Union, Callable
 import io
+from statsmodels.stats.outliers_influence import variance_inflation_factor
 import requests
 import importlib
 
@@ -47,13 +48,15 @@ do_predict_next_recession = True
 # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
 selection_limit = 5.0e-2
 
-interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
+interaction_type = None  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
 correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
 transform_vars = True
 
 # DIMENSION REDUCTION. Recommend you use either PCA or a maximum value for variance. Otherwise the data could get big.
 pca_variance = 1.0  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
-max_var_correlation = 0.5  # Options: None (if you don't want to remove vars) or a float 0-1. 0.8-0.9 is usually good.
+
+# Options: -1 to do nothing, 0 for "auto", or a float 0-1. 0.8-0.9 is usually good. >1 if you want a specific number of variables.
+max_var_correlation = 0
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -514,6 +517,7 @@ def predict_recession_time(df: pd.DataFrame,
     pdq = list(itertools.product(p, d, q))
     seasonal_pdq = [(x[0], x[1], x[2], 4) for x in list(itertools.product(p, d, q))]
 
+    best_model = None
     for param in pdq:
         for param_seasonal in seasonal_pdq:
             try:
@@ -526,7 +530,10 @@ def predict_recession_time(df: pd.DataFrame,
 
                 results = mod.fit()
 
-                print('ARIMA{}x{}12 - AIC:{}'.format(param, param_seasonal, results.aic))
+                if best_model is None or results.aic < best_model.aic:
+                    best_model = results
+
+                print('SARIMAX{}x{}12 - AIC:{}'.format(param, param_seasonal, results.aic))
             except Exception as e:
                 continue
 
@@ -534,56 +541,30 @@ def predict_recession_time(df: pd.DataFrame,
     end = df.loc[~train_mask].index[-1]
     start_pred = pd.DatetimeIndex(df.loc[train_mask].index.shift(1,'Q'),
                                   dtype=datetime.date)[-1]
-    sarimax_preds = results.get_prediction(start=start,
+    sarimax_preds = best_model.get_prediction(start=start,
                                            end=end,
                                            exog=df.loc[start_pred:end, x_names],
                                            dynamic=True)
     print(sarimax_preds)
 
-    df.loc[sarimax_preds.index.values, y_field_name] = sarimax_preds
+    y_field_name_pred = 'pred_' + y_field_name
 
-    # from statsmodels.tsa.arima_model import ARIMA
-    # arima_fit = ARIMA(df[y_field_name], (1, 0, 1), df[x_names]).fit()
-    # arima_preds = df.loc[:, y_field_name] = arima_fit.predict()
-    # print(arima_preds)
-    report_name = 'recession_date_{0}'.format(model_set)
-    m = Model_Builder(df
-                    , x_fields=x_fields
-                    , y_field=y_field
-                    , model_type=model_set
-                    , report_name=report_name
-                    , show_model_tests=True
-                    , retrain_model=True
-                    , selection_limit=selection_limit
-                    , predict_all=True
-                    , verbose=verbose
-                    , train_pct=train_pct
-                    , random_train_test=False
-                    , stack_include_preds=stack_include_preds
-                    , final_include_data=final_include_data
-                    , use_test_set=True
-                    , auto_reg_periods=1)
+    df.loc[:, y_field_name_pred] = df.loc[:, y_field_name]
 
-    for df, final_model_name in m.predict():
+    df.loc[sarimax_preds.predicted_mean.index.values, y_field_name_pred] = sarimax_preds.predicted_mean.values
+    report_name = 'time_to_next_recession_sarimax'
 
-        y_field_name_pred = 'pred_' + y_field_name
-        #################################
+    # if years_forward in [10]:
+    chart(df
+          , ys=[['sp500'], [y_field_name, y_field_name_pred, 'tsy_10yr_yield']]
+          , invert=[False, False]
+          , log_scale=[True, False]
+          , save_name='_'.join([y_field_name_pred, report_name])
+          , title='_'.join([y_field_name, report_name]))
 
-        y_field_name_pred_fut = y_field_name_pred + '_fut'
-        df[y_field_name_pred_fut] = df[y_field_name_pred].astype(np.float64)
-        df[y_field_name_pred_fut][train_mask] = np.nan
-
-        # if years_forward in [10]:
-        chart(df
-              , ys=[['sp500'], [y_field_name, y_field_name_pred, 'tsy_10yr_yield']]
-              , invert=[False, False]
-              , log_scale=[True, False]
-              , save_name='_'.join([y_field_name_pred, report_name])
-              , title='_'.join([y_field_name, report_name]))
-
-        yield (OrderedDict(((y_field_name, df[y_field_name])
-            , (y_field_name_pred, df[y_field_name_pred])))
-            , report_name)
+    yield (OrderedDict(((y_field_name, df[y_field_name])
+        , (y_field_name_pred, df[y_field_name_pred])))
+        , report_name)
 
 
 def decimal_to_date(d: str):
@@ -882,6 +863,60 @@ def trim_outliers(y: pd.Series, thresh=4):
     y[y < min_thresh] = min_thresh
     return y
 
+
+def reduce_variables(df: pd.DataFrame, field_names: list, max_num: Union[int,float]=None):
+    num_vars = len(field_names)-1
+    print('Current vars: {0}'.format(num_vars))
+    if not max_num or max_num == 0:
+        max_num = int(np.power(df.shape[0], 0.5))
+
+    print('Max allowed vars: {0}'.format(max_num))
+
+    if num_vars > max_num:
+        print("Conducting PCA and pruning components above the desired explained variance ratio")
+        pca_model = TruncatedSVD(n_components=max_num, random_state=555)
+
+        x_names_pca = []
+        x_results = pca_model.fit_transform(df.loc[:, field_names]).T
+        # print(pca_model.components_)
+        print('PCA explained variance ratios.')
+        print(pca_model.explained_variance_ratio_)
+
+        sum_variance = 0
+        for idx, var in enumerate(pca_model.explained_variance_ratio_):
+            sum_variance += var
+            pca_name = 'pca_{0}'.format(idx)
+            df[pca_name] = x_results[idx]
+            x_names_pca.append(pca_name)
+            if num_vars <= max_num:
+                break
+        print('Explained variance retained: {0:.2f}'.format(sum_variance))
+        return df, x_names_pca
+
+    return df, field_names
+
+
+def remove_high_vif(X: pd.DataFrame, max_num: Union[int,float]=None):
+    num_vars = X.shape[1]
+    colnames = X.columns.values
+    if not max_num or max_num == 0:
+        max_num = round(np.power(X.shape[0], 0.3), 0)
+
+    if num_vars > max_num:
+        print('Removing variables with high VIF. New variable qty will be: [{0}]'.format(max_num))
+
+        from joblib import Parallel, delayed
+        while num_vars > max_num:
+            vif = Parallel(n_jobs=-2, verbose=-1)(delayed(variance_inflation_factor)(X.loc[:, colnames].values, ix) for ix in range(X.loc[:, colnames].shape[1]))
+
+            maxloc = vif.index(max(vif))
+            print('dropping \'' + X.loc[:, colnames].columns[maxloc] + '\' at index: ' + str(maxloc))
+            del colnames[maxloc]
+
+        print('Remaining variables:')
+        print(colnames)
+
+    return X.loc[:, colnames]
 
 def calc_equity_alloc() -> pd.Series:
     nonfin_biz_equity_liab = fred.get_series('NCBEILQ027S', observation_start=start_dt, observation_end=end_dt)
@@ -1238,8 +1273,12 @@ except Exception as e:
     ##########################################################################################################
     # Remove any highly correlated items from the regression, to reduce issues with the model
     ##########################################################################################################
-    if max_var_correlation and max_var_correlation < 1:
-        x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
+    if max_var_correlation is not None and max_var_correlation >= 0:
+        if 0 < max_var_correlation < 1:
+            x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
+            print('X Names Length: {0}'.format(len(x_names)))
+        elif max_var_correlation >= 1 or max_var_correlation == 0:
+            df, x_names = reduce_variables(df=df, field_names=x_names, max_num=max_var_correlation)
         print('X Names Length: {0}'.format(len(x_names)))
 
     # Perform the addition of the interaction terms
@@ -1267,8 +1306,12 @@ except Exception as e:
     ##########################################################################################################
     # Remove any highly correlated items from the regression, to reduce issues with the model
     ##########################################################################################################
-    if max_var_correlation and max_var_correlation < 1:
-        x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
+    if max_var_correlation is not None and max_var_correlation >= 0:
+        if 0 < max_var_correlation < 1:
+            x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
+            print('X Names Length: {0}'.format(len(x_names)))
+        elif max_var_correlation >= 1 or max_var_correlation == 0:
+            df, x_names = reduce_variables(df=df, field_names=x_names, max_num=max_var_correlation)
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
@@ -1362,8 +1405,12 @@ except Exception as e:
     ##########################################################################################################
     # Finally, remove any highly correlated items from the regression, to reduce issues with the model
     ##########################################################################################################
-    if max_var_correlation and max_var_correlation < 1:
-        x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
+    if max_var_correlation is not None and max_var_correlation >= 0:
+        if 0 < max_var_correlation < 1:
+            x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
+            print('X Names Length: {0}'.format(len(x_names)))
+        elif max_var_correlation >= 1 or max_var_correlation == 0:
+            df, x_names = reduce_variables(df=df, field_names=x_names, max_num=max_var_correlation)
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
@@ -1394,7 +1441,7 @@ if do_predict_next_recession:
                                                  model_set=next_recession_models):
         for k, v in d.items():
             df[k] = v
-        new_dataset = [v for v in d.values()][-1]
+
         # new_field_name = 'next_recession_{0}'.format(report_name)
         x_names.append([v for v in d.keys()][-1])
 
@@ -1409,7 +1456,6 @@ if do_predict_returns:
             for k, v in d.items():
                 df[k] = v
 
-            new_dataset = [v for v in d.values()][-1]
             new_field_name = 'sp500_{0}'.format(report_name)
 
 # RECESSION PREDICTIONS
@@ -1423,7 +1469,6 @@ if do_predict_recessions:
             for k, v in d.items():
                 df[k] = v
 
-            new_dataset = [v for v in d.values()][-1]
             new_field_name = 'recession_{0}'.format(report_name)
 
 

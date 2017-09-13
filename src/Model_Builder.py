@@ -718,7 +718,7 @@ class Model_Builder:
                    fields,
                    y,
                    mask,
-                   selection_limit: float=1.0):
+                   selection_limit):
 
         mappings = self.train_models(df[mask], fields)
         columns, x, mappings = self.get_vectors(df[mask], fields, mappings)
