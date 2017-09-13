@@ -40,23 +40,25 @@ finaldata_from_file = False  # Whether to load the final data (post-transformati
 
 # Do you want to predict returns? Or Recessions?
 do_predict_returns = True
-returns_predict_years_forward = [9, 10]
+returns_predict_years_forward = [9, 10, 12]
 do_predict_recessions = False
 recession_predict_years_forward = [2]
-do_predict_next_recession = True
+do_predict_next_recession = False
 
 # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
 selection_limit = 5.0e-2
 
-interaction_type = None  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
+interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
 correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
 transform_vars = True
 
-# DIMENSION REDUCTION. Recommend you use either PCA or a maximum value for variance. Otherwise the data could get big.
-pca_variance = 1.0  # Options: None (if you don't want PCA) or a float 0-1 for the amount of explained variance desired.
+# VARIANCE REDUCTION. Either PCA Variance or Correlation Limits
+variance_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
+max_variance = 0  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
 
-# Options: -1 to do nothing, 0 for "auto", or a float 0-1. 0.8-0.9 is usually good. >1 if you want a specific number of variables.
-max_var_correlation = 0
+# DIMENSION REDUCTION. Either PCA Variance or Correlation Rankings
+dimension_method = 'corr'  # Use either None, 'corr' for correlations, or 'pca' for PCA
+max_variables = 0  # Options: 0 for 'auto' [n_obs ^ (4/5)] or an integer for a specific number of variables.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -65,6 +67,8 @@ train_pct = 0.8  # Defines the train/test split
 real = False
 sp_field_name = 'sp500'
 recession_field_name = 'recession_usa'
+prev_rec_field_name = 'recession_usa_time_since_prev'
+next_rec_field_name = 'recession_usa_time_until_next'
 verbose = False
 fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
 ewm_halflife = 4.2655*2  # Halflife for EWM calculations. 4.2655 corresponds to a 0.125 weight.
@@ -74,7 +78,7 @@ final_include_data = False
 
 if do_predict_next_recession:
     initial_models = ['rfor_r','gbr','elastic_net','knn_r','svr']
-    if pca_variance < 1.:
+    if max_variance < 1. or max_variables == 0:
         initial_models.extend(['neural_r','gauss_proc_r'])
 
     final_models = ['elastic_net_stacking']
@@ -83,13 +87,13 @@ if do_predict_next_recession:
 
 if do_predict_recessions:
     initial_models=['logit','etree_c','pass_agg_c','nearest_centroid','bernoulli_nb','gbc','svc','bernoulli_nb','ridge_c']
-    if pca_variance < 1.:
+    if max_variance < 1. or max_variables == 0:
         initial_models.extend(['neural_c','gauss_proc_c'])
 
     # BEST MODELS: logit, svc, sgd_c, neural_c, gauss_proc_c
     # Overall best model: svc???
     final_models=['logit','svc','sgd_c']
-    if (not final_include_data) or pca_variance < 1.:
+    if (not final_include_data) or max_variance < 1. or max_variables == 0:
         final_models.extend(['neural_c','gauss_proc_c'])
 
     recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
@@ -98,12 +102,12 @@ if do_predict_recessions:
 
 
 if do_predict_returns:
-    initial_models = ['rfor_r','gbr','pass_agg_r','elastic_net','knn_r','ridge','svr']
-    if pca_variance < 1.:
+    initial_models = ['rfor_r','gbr','pass_agg_r','elastic_net','knn_r','ridge_r','svr']
+    if max_variance < 1. or max_variables == 0:
         initial_models.extend(['neural_r','gauss_proc_r'])
 
-    final_models = ['elastic_net','svr','gbr','elastic_net_stacking']
-    if (not final_include_data) or pca_variance < 1.:
+    final_models = ['svr','elastic_net_stacking','ridge_r','linreg']
+    if (not final_include_data) or max_variance < 1. or max_variables == 0:
         final_models.extend(['neural_r','gauss_proc_r'])
 
     returns_models = ModelSet(final_models=final_models, initial_models=initial_models)
@@ -803,53 +807,6 @@ def get_all_interactions(new_names: list, curr_name: str=None, series: pd.Series
         get_all_interactions(new_names=new_names[1:])
 
 
-def remove_correlated(df: pd.DataFrame, x_fields: list, max_corr_val: float):
-    '''
-    Obj: Drops features that are strongly correlated to other features.
-          This lowers model complexity, and aids in generalizing the model.
-    Inputs:
-          df: features df (x)
-          corr_val: Columns are dropped relative to the corr_val input (e.g. 0.8)
-    Output: df that only includes uncorrelated features
-    '''
-
-    print('Removing one variable for each pair of variables with correlation greater than [{0}]'.format(max_corr_val))
-    # Creates Correlation Matrix and Instantiates
-    corr_matrix = df.loc[:, x_fields].corr()
-    # iters = range(len(corr_matrix.columns) - 1)
-    drop_cols = set()
-
-    # Iterates through Correlation Matrix Table to find correlated columns
-    # for i in iters:
-    for i, v in enumerate(x_fields[:-1]):
-        max_corr = corr_matrix.iloc[i, (i+1):].max()
-        if max_corr >= max_corr_val:
-            # Prints the correlated feature set and the corr val
-            # print(col.values[0], "|", row.values[0], "|", round(val[0][0], 2))
-            drop_cols.add(v)
-        # for j in reversed(range(i)):
-            # item = corr_matrix.iloc[j:(j+1), (i+1):(i+2)]
-            # col = item.columns
-            # row = item.index
-            # val = item.values
-            # if val >= max_corr_val:
-            #     # Prints the correlated feature set and the corr val
-            #     # print(col.values[0], "|", row.values[0], "|", round(val[0][0], 2))
-            #     drop_cols.add(v)
-            #     break
-
-    return_x_vals = [v for v in x_fields if v not in list(drop_cols)]
-    return return_x_vals
-    # drops = sorted(set(drop_cols))[::-1]
-
-    # Drops the correlated columns
-    # for i in drops:
-    #     col = x.iloc[:, (i+1):(i+2)].columns.values
-    #     df = x.drop(col, axis=1)
-
-    # return df
-
-
 def trim_outliers(y: pd.Series, thresh=4):
     # warning: this function does not check for NAs
     # nor does it address issues when
@@ -864,11 +821,33 @@ def trim_outliers(y: pd.Series, thresh=4):
     return y
 
 
-def reduce_variables(df: pd.DataFrame, field_names: list, max_num: Union[int,float]=None):
+def reduce_vars_corr(df: pd.DataFrame, field_names: list, max_num: float):
+    num_vars = len(field_names)-1
+    print('Current vars:  {0}'.format(num_vars))
+    if not max_num or max_num == 0:
+        max_num = int(np.power(df.shape[0], 0.8))
+
+    print('Max allowed vars: {0}'.format(max_num))
+
+    if num_vars > max_num:
+
+        # Creates Correlation Matrix
+        corr_matrix = df.loc[:, field_names].corr()
+
+        max_corr = [(fld, corr_matrix.iloc[i+1, :(i)].max()) for i, fld in reverse_enumerate(field_names[1:])]
+        max_corr.sort(key=lambda tup: tup[1])
+
+        return_x_vals = [fld for fld, corr in max_corr[:max_num]]
+        print('Number of Remaining Fields: {0}'.format(len(return_x_vals)))
+        print('Remaining Fields: {0}'.format(return_x_vals))
+        return return_x_vals
+    return field_names
+
+def reduce_vars_pca(df: pd.DataFrame, field_names: list, max_num: Union[int,float]=None):
     num_vars = len(field_names)-1
     print('Current vars: {0}'.format(num_vars))
     if not max_num or max_num == 0:
-        max_num = int(np.power(df.shape[0], 0.5))
+        max_num = int(np.power(df.shape[0], 0.6))
 
     print('Max allowed vars: {0}'.format(max_num))
 
@@ -891,9 +870,58 @@ def reduce_variables(df: pd.DataFrame, field_names: list, max_num: Union[int,flo
             if num_vars <= max_num:
                 break
         print('Explained variance retained: {0:.2f}'.format(sum_variance))
+        print('Number of PCA Fields: {0}'.format(len(x_names_pca)))
+        print('PCA Fields: {0}'.format(x_names_pca))
         return df, x_names_pca
-
     return df, field_names
+
+
+def reduce_variance_corr(df: pd.DataFrame, x_fields: list, max_corr_val: float):
+    print('Removing one variable for each pair of variables with correlation greater than [{0}]'.format(max_corr_val))
+    # Creates Correlation Matrix and Instantiates
+    corr_matrix = df.loc[:, x_fields].corr()
+    drop_cols = set()
+    if max_corr_val <= 0:
+        max_corr_val = 0.8
+
+    # Iterates through Correlation Matrix Table to find correlated columns
+    for i, v in enumerate(x_fields[:-1]):
+        max_corr = corr_matrix.iloc[i, (i+1):].max()
+        if max_corr >= max_corr_val:
+            drop_cols.add(v)
+
+    return_x_vals = [v for v in x_fields if v not in list(drop_cols)]
+    print('Number of Remaining Fields: {0}'.format(len(return_x_vals)))
+    print('Remaining Fields: {0}'.format(return_x_vals))
+    return return_x_vals
+
+
+def reduce_variance_pca(df: pd.DataFrame, field_names: list, explained_variance: float):
+    print("Conducting PCA and pruning components above the desired explained variance ratio")
+    max_components = len(field_names) - 1
+    if explained_variance <= 0:
+        explained_variance = 0.99
+
+    pca_model = TruncatedSVD(n_components=max_components, random_state=555)
+    x_results = pca_model.fit_transform(df.loc[:, field_names]).T
+    # print(pca_model.components_)
+    print('PCA explained variance ratios.')
+    print(pca_model.explained_variance_ratio_)
+
+    x_names_pca = []
+    sum_variance = 0.
+    for idx, var in enumerate(pca_model.explained_variance_ratio_):
+        sum_variance += var
+        pca_name = 'pca_{0}'.format(idx)
+        df[pca_name] = x_results[idx]
+        x_names_pca.append(pca_name)
+        if sum_variance > explained_variance:
+            break
+
+    print('Explained variance retained: {0:.2f}'.format(sum_variance))
+    print('Number of PCA Fields: {0}'.format(len(x_names_pca)))
+    print('PCA Fields: {0}'.format(x_names_pca))
+    return df, x_names_pca
 
 
 def remove_high_vif(X: pd.DataFrame, max_num: Union[int,float]=None):
@@ -956,28 +984,6 @@ def calc_equity_alloc() -> pd.Series:
     return make_qtrly(equity_alloc, 'last')
 
 
-def convert_to_pca(pca_df: pd.DataFrame, field_names: list, explained_variance: float=0.95):
-    print("Conducting PCA and pruning components above the desired explained variance ratio")
-    max_components = len(field_names) - 1
-    pca_model = TruncatedSVD(n_components=max_components, random_state=555)
-
-    x_results = pca_model.fit_transform(pca_df.loc[:, field_names]).T
-    # print(pca_model.components_)
-    print('PCA explained variance ratios.')
-    print(pca_model.explained_variance_ratio_)
-
-    x_names_pca = []
-    sum_variance = 0
-    for idx, var in enumerate(pca_model.explained_variance_ratio_):
-        sum_variance += var
-        pca_name = 'pca_{0}'.format(idx)
-        pca_df[pca_name] = x_results[idx]
-        x_names_pca.append(pca_name)
-        if sum_variance > explained_variance:
-            break
-    return x_names_pca
-
-
 def get_nyse_margin_debt() -> pd.Series:
     url = 'http://www.nyxdata.com/nysedata/asp/factbook/table_export_csv.asp?mode=tables&key=50'
     with requests.Session() as s:
@@ -1012,7 +1018,7 @@ data_sources['gold_fix_3pm'] = data_source('GOLDPMGBD228NLBM', 'fred')
 data_sources['unempl_rate'] = data_source('UNRATE', 'fred')
 data_sources['industrial_prod'] = data_source('INDPRO', 'fred')
 data_sources['empl_construction'] = data_source('USCONS', 'fred')
-data_sources['equity_alloc'] = data_source(None, globals()['calc_equity_alloc'])
+data_sources['equity_alloc'] = data_source(None, calc_equity_alloc)
 data_sources['fed_reserves_tot'] = data_source('RESBALNS', 'fred')
 data_sources['monetary_base_tot'] = data_source('BOGMBASE', 'fred')
 data_sources['monetary_base_balances'] = data_source('BOGMBBMW', 'fred')
@@ -1037,6 +1043,12 @@ data_sources['tax_receipts_tot'] = data_source('W006RC1Q027SBEA', 'fred')
 data_sources['nonfin_equity'] = data_source('MVEONWMVBSNNCB', 'fred')
 data_sources['nonfin_networth'] = data_source('TNWMVBSNNCB', 'fred')
 data_sources['nonfin_pretax_profit'] = data_source('NFCPATAX', 'fred')
+data_sources['mzm_velocity'] = data_source('MZMV', 'fred')
+data_sources['m2_velocity'] = data_source('M2V', 'fred')
+data_sources['m1_velocity'] = data_source('M1V', 'fred')
+data_sources['mzm_moneystock'] = data_source('MZMSL', 'fred')
+data_sources['m2_moneystock'] = data_source('M2NS', 'fred')
+data_sources['m1_moneystock'] = data_source('M1NS', 'fred')
 
 data_sources['recession_usa'] = data_source('USREC', 'fred')
 
@@ -1118,9 +1130,9 @@ except Exception as e:
         # FULL LIST FOR LINEAR REGRESSION
         x_names = [
             'equity_alloc'
-            , 'tsy_10yr_yield'
-            , 'tsy_5yr_yield'
-            , 'tsy_3mo_yield'
+            # , 'tsy_10yr_yield'
+            # , 'tsy_5yr_yield'
+            # , 'tsy_3mo_yield'
             # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
             , 'unempl_rate'
             , 'empl_construction'
@@ -1131,8 +1143,8 @@ except Exception as e:
             # , 'fed_funds_rate'
             , 'tsy_3m10y_curve'
             , 'industrial_prod'
-            , 'tsy_10yr_minus_fed_funds_rate'
-            , 'tsy_10yr_minus_cpi'
+            # , 'tsy_10yr_minus_fed_funds_rate'
+            # , 'tsy_10yr_minus_cpi'
             # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
             # , 'gdp_nom'
             # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
@@ -1143,6 +1155,9 @@ except Exception as e:
             , 'corp_profit_margins'
             , 'cape'
             , 'tobin_q'
+            , 'mzm_velocity'
+            , 'm2_velocity'
+            , 'm1_velocity'
         ]
         """
         x_names = [
@@ -1203,6 +1218,9 @@ except Exception as e:
             , 'corp_profit_margins'
             , 'cape'
             , 'tobin_q'
+            , 'mzm_velocity'
+            , 'm2_velocity'
+            , 'm1_velocity'
         ]
 
     empty_cols = [c for c in df.columns.values if all(df[c].isnull())]
@@ -1252,6 +1270,9 @@ except Exception as e:
         , 'corp_profit_margins'
         , 'cape'
         , 'tobin_q'
+        , 'mzm_velocity'
+        , 'm2_velocity'
+        , 'm1_velocity'
     ]
 
     ##########################################################################################################
@@ -1268,24 +1289,17 @@ except Exception as e:
     ##########################################################################################################
     # Value Imputation
     ##########################################################################################################
-    df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
+    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
 
-    ##########################################################################################################
-    # Remove any highly correlated items from the regression, to reduce issues with the model
-    ##########################################################################################################
-    if max_var_correlation is not None and max_var_correlation >= 0:
-        if 0 < max_var_correlation < 1:
-            x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
+    ################################################################################################################
+    # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
+    ################################################################################################################
+    if (dimension_method is not None) and max_variables >= 0:
+        if dimension_method == 'corr':
+            x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
             print('X Names Length: {0}'.format(len(x_names)))
-        elif max_var_correlation >= 1 or max_var_correlation == 0:
-            df, x_names = reduce_variables(df=df, field_names=x_names, max_num=max_var_correlation)
-        print('X Names Length: {0}'.format(len(x_names)))
-
-    # Perform the addition of the interaction terms
-    corr_x_names = None
-    print('Creating correlation interaction terms [{0}]'.format(correlation_type))
-    if correlation_type == 'level_1':
-        df, corr_x_names = get_level1_correlations(df=df, x_names=x_names)
+        elif dimension_method == 'pca':
+            df, x_names = reduce_vars_pca(df=df, field_names=x_names, max_num=max_variables)
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
@@ -1303,15 +1317,15 @@ except Exception as e:
         x_names.extend(inter_x_names)
         print('X Names Length: {0}'.format(len(x_names)))
 
-    ##########################################################################################################
-    # Remove any highly correlated items from the regression, to reduce issues with the model
-    ##########################################################################################################
-    if max_var_correlation is not None and max_var_correlation >= 0:
-        if 0 < max_var_correlation < 1:
-            x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
+    ################################################################################################################
+    # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
+    ###############################################################################################################
+    if (dimension_method is not None) and max_variables >= 0:
+        if dimension_method == 'corr':
+            x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
             print('X Names Length: {0}'.format(len(x_names)))
-        elif max_var_correlation >= 1 or max_var_correlation == 0:
-            df, x_names = reduce_variables(df=df, field_names=x_names, max_num=max_var_correlation)
+        elif dimension_method == 'pca':
+            df, x_names = reduce_vars_pca(df=df, field_names=x_names, max_num=max_variables)
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
@@ -1341,7 +1355,16 @@ except Exception as e:
     ##########################################################################################################
     # Value Imputation
     ##########################################################################################################
-    df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
+    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+
+    ##########################################################################################################
+    # Create and add any interaction terms
+    ##########################################################################################################
+    corr_x_names = None
+    if correlation_type == 'level_1':
+        print('Creating correlation interaction terms [{0}]'.format(correlation_type))
+        df, corr_x_names = get_level1_correlations(df=df, x_names=x_names)
+        print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
     # Create squared and squared-root versions of all the x fields
@@ -1365,7 +1388,7 @@ except Exception as e:
     if corr_x_names:
         x_names.extend(corr_x_names)
         # IMPUTE VALUES!!!
-        df.loc[:, x_names] = impute_if_any_nulls(df.loc[:, x_names], imputer=default_imputer)
+        df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
@@ -1383,10 +1406,10 @@ except Exception as e:
     df[sp500_qtr_since_fall] = time_since_last_true(df[new_x_names[-1]])
     x_names.append(sp500_qtr_since_fall)
 
+    ##########################################################################################################
     # Add x-variable for time since the last recession. Create y-variable for time until the next recession.
+    ##########################################################################################################
     last_rec = -1
-    prev_rec_field_name = 'recession_usa_time_since_prev'
-    next_rec_field_name = 'recession_usa_time_until_next'
     for idx, val in enumerate(df.index.values):
         rec_val = df.get_value(val, 'recession_usa')
         if rec_val == 1:
@@ -1398,27 +1421,47 @@ except Exception as e:
             df.set_value(val, prev_rec_field_name, idx - last_rec)
     x_names.append(prev_rec_field_name)
 
-    df.loc[:, x_names+[next_rec_field_name]] = impute_if_any_nulls(df=df.loc[:, x_names+[next_rec_field_name]],
-                                                                   imputer=default_imputer)
+    # print(*df.index.values, sep='\n')
 
+    if do_predict_next_recession:
+        df[x_names+[next_rec_field_name]] = impute_if_any_nulls(df=df[x_names+[next_rec_field_name]], imputer=default_imputer)
+    else:
+        x_names.append(next_rec_field_name)
+        df[x_names] = impute_if_any_nulls(df=df[x_names], imputer=default_imputer)
 
-    ##########################################################################################################
-    # Finally, remove any highly correlated items from the regression, to reduce issues with the model
-    ##########################################################################################################
-    if max_var_correlation is not None and max_var_correlation >= 0:
-        if 0 < max_var_correlation < 1:
-            x_names = remove_correlated(df, x_fields=x_names, max_corr_val=max_var_correlation)
+    ################################################################################################################
+    # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
+    ################################################################################################################
+    if (dimension_method is not None) and max_variables >= 0:
+        if dimension_method == 'corr':
+            x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
             print('X Names Length: {0}'.format(len(x_names)))
-        elif max_var_correlation >= 1 or max_var_correlation == 0:
-            df, x_names = reduce_variables(df=df, field_names=x_names, max_num=max_var_correlation)
+        elif dimension_method == 'pca':
+            df, x_names = reduce_vars_pca(df=df, field_names=x_names, max_num=max_variables)
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
-    # If desired, use PCA to reduce the predictor variables
+    # VARIANCE REDUCTION: Remove any highly correlated fields and/or use pca to eliminate correlation.
     ##########################################################################################################
-    if pca_variance and pca_variance < 1:
-        x_names = convert_to_pca(df, x_names, explained_variance=pca_variance)
+
+    if (variance_method is not None) and max_variance < 1. and dimension_method != 'pca':
+        if dimension_method == 'corr':
+            x_names = reduce_variance_corr(df=df, x_fields=x_names, max_corr_val=max_variance)
+        elif variance_method == 'pca':
+            df, x_names = reduce_variance_pca(df=df, field_names=x_names, explained_variance=max_variance)
         print('X Names Length: {0}'.format(len(x_names)))
+
+for n in x_names:
+    if df[n].isnull().any():
+        msg = 'Field "{0}" has null value!!!!'
+        print(msg)
+        raise ValueError(msg)
+    if any([np.isinf(v) for v in df[n].tolist()]):
+        msg = 'Field "{0}" has null value!!!!'
+        print(msg)
+        raise ValueError(msg)
+print("== Final X Values for Modeling ===")
+print(*x_names, sep='\n')
 
 # print('===== Head =====\n', df.head(5))
 # print('===== Tail =====\n', df.tail(5))

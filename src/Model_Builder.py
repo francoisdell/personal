@@ -866,7 +866,7 @@ class Model_Builder:
                 clf = LogisticRegression()
             elif model.model_class == 'linreg':
                 clf = LinearRegression()
-            elif model.model_class == 'ridge':
+            elif model.model_class == 'ridge_r':
                 clf = Ridge()
             elif model.model_class == 'ridge_c':
                 clf = RidgeClassifier()
