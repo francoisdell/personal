@@ -125,27 +125,29 @@ class Model:
 
 
 class Model_Builder:
-    def __init__(self
-            , df: pd.DataFrame
-            , x_fields: dict
-            , y_field: Union[dict, OrderedDict]
-            , model_type: Union[str, list, ModelSet]
-            , report_name: str
-            , show_model_tests: bool=False
-            , retrain_model: bool=False
-            , selection_limit: float=5.0e-2
-            , predict_all: bool=False
-            , verbose: bool=True
-            , train_pct: float=0.7
-            , random_train_test: bool=True
-            , max_train_data_points: int=50000
-            , pca_explained_var: float=1.0
-            , stack_include_preds: bool=True
-            , final_include_data: bool=True
-            , cross_val_iters: tuple=(3, 2)
-            , cross_val_model=None
-            , use_test_set: bool=False
-            , auto_reg_periods: int=0):
+    def __init__(self,
+                 df: pd.DataFrame,
+                 x_fields: dict,
+                 y_field: Union[dict, OrderedDict],
+                 model_type: Union[str, list, ModelSet],
+                 report_name: str,
+                 show_model_tests: bool=False,
+                 retrain_model: bool=False,
+                 selection_limit: float=5.0e-2,
+                 predict_all: bool=False,
+                 verbose: bool=True,
+                 train_pct: float=0.7,
+                 random_train_test: bool=True,
+                 max_train_data_points: int=50000,
+                 pca_explained_var: float=1.0,
+                 stack_include_preds: bool=True,
+                 final_include_data: bool=True,
+                 cross_val_iters: tuple=(5, 3),
+                 cross_val_model=None,
+                 use_test_set: bool=True,
+                 auto_reg_periods: int=0,
+                 correlation_reduction: Union[dict, tuple]=(('method','corr'),('limit',0.95)) # 'corr' or 'pca'
+                 ):
         
         self.df = df
         self.x_fields = x_fields
@@ -169,6 +171,8 @@ class Model_Builder:
         self.s = Settings(report_name=report_name)
         self.use_test_set = use_test_set
         self.auto_reg_periods = auto_reg_periods
+        if correlation_reduction and not isinstance(correlation_reduction, dict):
+            self.correlation_reduction = dict(correlation_reduction)
 
     def predict(self) -> pd.DataFrame:
     
@@ -231,7 +235,7 @@ class Model_Builder:
                             mask_train[idx] = False
                         mask_train_qty += 1
     
-            if not self.use_test_set:
+            if self.use_test_set is False:
                 print("Don't need to split the set into train/validate since we're using cross validation.")
                 mask_train = mask_train_test
     
@@ -270,9 +274,9 @@ class Model_Builder:
         #         for lag in range(self.auto_reg_periods):
         #             y_field_lag_name = y_field + '_lag{0}'.format(lag+1)
         #             self.df[y_field_lag_name] = self.df[y_field].shift(lag-1)
-        #             if np.isnan(self.df[y_field_lag_name].iloc[0]):
-        #                 self.df[y_field_lag_name].iloc[0] = self.df[y_field_lag_name].mean()
-        #             self.x_fields[y_field_lag_name] = y_type
+        #             if np.isnan(self.df[y_field_lag_namee].iloc[0] = self.df[y_field_lag_name].mean()
+        #             self.x_fields[y_field_lag_n].iloc[0]):
+        #                 self.df[y_field_lag_namame] = y_type
 
         # CHANGE THE 'cat' to a list of all possible values in the y field. This is necessary because the LabelEncoder
         # that will encode the Y variable values can't handle never-before-seen values. So we need to pass it every
@@ -284,12 +288,13 @@ class Model_Builder:
         y_mappings = self.train_models(self.df[mask_train], self.y_field)
         _, y_train, y_mappings = self.get_vectors(self.df[mask_train], self.y_field, y_mappings, is_y=True)
 
-        x_train, self.x_fields, x_columns, x_mappings = \
+        self.df, x_train, self.x_fields, x_columns, x_mappings = \
             self.get_fields(self.df,
                             self.x_fields,
                             y_train,
                             mask_train,
-                            self.selection_limit)
+                            self.selection_limit,
+                            correlation_reduction=self.correlation_reduction)
     
         pred_x_fields = dict()
         pred_x_mappings = dict()
@@ -297,8 +302,6 @@ class Model_Builder:
             print('FIELDS\n', np.asarray(list(self.x_fields.keys())))
 
         for idx, model in enumerate(self.model_type.initial_models):
-
-
 
             model, x_train = self.train_predictive_model(model,
                                                         self.retrain_model,
@@ -381,12 +384,13 @@ class Model_Builder:
                     # new_x_train = fix_np_nan(new_x_train)
                     # new_x_train = sparse.csc_matrix(np.hstack(new_x_train))
                     # x_train = self.matrix_hstack((x_train, new_x_train), return_sparse=True)
-                    x_train, self.x_fields, x_columns, x_mappings = \
+                    self.df, x_train, self.x_fields, x_columns, x_mappings = \
                         self.get_fields(self.df,
                                         self.x_fields,
                                         y_train,
                                         mask_train,
-                                        self.selection_limit)
+                                        self.selection_limit,
+                                        correlation_reduction=self.correlation_reduction)
                 else:
                     pred_x_fields = {**pred_x_fields, **new_x_fields}
                     pred_x_mappings = {**pred_x_mappings, **new_x_mappings}
@@ -406,12 +410,13 @@ class Model_Builder:
             else:
                 self.x_fields = pred_x_fields
 
-            x_train, self.x_fields, x_columns, x_mappings = \
+                self.df, x_train, self.x_fields, x_columns, x_mappings = \
                 self.get_fields(self.df,
                                 self.x_fields,
                                 y_train,
                                 mask_train,
-                                self.selection_limit)
+                                self.selection_limit,
+                                correlation_reduction=self.correlation_reduction)
 
             model, x_train = self.train_predictive_model(model,
                                                         self.retrain_model,
@@ -718,26 +723,43 @@ class Model_Builder:
                    fields,
                    y,
                    mask,
-                   selection_limit):
+                   selection_limit,
+                   correlation_reduction):
 
         mappings = self.train_models(df[mask], fields)
-        columns, x, mappings = self.get_vectors(df[mask], fields, mappings)
-        x = fix_np_nan(x)
 
+        ### Remove Highly Correlated Variables (If Specified)###
+        if correlation_reduction:
+            limit = correlation_reduction['limit']
+            method = correlation_reduction['method']
+            if 0 < limit < 1:
+                if method == 'corr':
+                    columns = reduce_variance_corr(df=df[mask], fields=list(fields), max_corr_val=limit, y=y)
+                elif method == 'pca':
+                    df, columns = reduce_variance_pca(df=df, field_names=list(fields), explained_variance=limit, mask=mask)
+                else:
+                    raise ValueError('Incorrect variance reduction method provided! [{0}]'.format(method))
+                [fields.pop(key) for key in [k for k in list(fields) if k not in columns]]
+
+                print('X Names Length: {0}'.format(len(fields)))
+
+        ### Remove Non-Significant Variables (If Specified)###
         if selection_limit < 1.0:
             print('Pruning x_fields for any variables with a p-value > {0}'.format(selection_limit))
             if len(np.unique(y)) == 2:
-                scores, p_vals = sk_feat_sel.f_classif(x, y)
+                scores, p_vals = sk_feat_sel.f_classif(df[mask][columns], y)
             else:
-                scores, p_vals = sk_feat_sel.f_regression(x, y, center=False)
-            for field_name in list(fields.keys()):
-                xcol_indices = [idx for idx, vals in enumerate(columns) if vals[2] == field_name]
-                if all(p_vals[idx] > selection_limit or p_vals[idx] == np.nan for idx in xcol_indices):
+                scores, p_vals = sk_feat_sel.f_regression(df[mask][columns], y)
+            for idx, field_name in reverse_enumerate(columns):
+                if p_vals[idx] > selection_limit:
                     fields.pop(field_name)
-            columns, x, mappings = self.get_vectors(df[mask], fields, mappings)
-            x = fix_np_nan(x)
+                # xcol_indices = [idx for idx, vals in enumerate(list(fields)) if vals[2] == field_name]
+                # if all(p_vals[idx] > selection_limit or p_vals[idx] == np.nan for idx in xcol_indices):
+                #     fields.pop(field_name)
 
-        return x, fields, columns, mappings
+        columns, x, mappings = self.get_vectors(df[mask], fields, mappings)
+        x = fix_np_nan(x)
+        return df, x, fields, columns, mappings
 
     
     def convert_to_pca(self, 
@@ -1385,3 +1407,82 @@ def get_decimals(vals: np.ndarray):
     # x = x.as_tuple().exponent  # returns -3
     # x = abs(x)
     return max_decimals
+
+
+def reduce_variance_corr(df: pd.DataFrame, fields: list, max_corr_val: float, y: Union[list, pd.Series, np.ndarray]):
+    print('Removing one variable for each pair of variables with correlation greater than [{0}]'.format(max_corr_val))
+    # Creates Correlation Matrix and Instantiates
+    corr_matrix = df[fields].corr()
+    drop_cols = set()
+    if max_corr_val <= 0.:
+        max_corr_val = 0.8
+
+    # Determine the p-values of the dataset and when a field must be dropped, prefer the field with the higher p-value
+    if len(np.unique(y)) == 2:
+        scores, p_vals = sk_feat_sel.f_classif(df[fields], y)
+    else:
+        scores, p_vals = sk_feat_sel.f_regression(df[fields], y)
+
+    # Iterates through Correlation Matrix Table to find correlated columns
+    for i, v in enumerate(fields[:-1]):
+        i2, c = sorted([(i2+1, v2) for i2, v2 in enumerate(corr_matrix.iloc[i, i+1:])], key=lambda tup: tup[1])[-1]
+
+        if c > max_corr_val:
+            if p_vals[i] <= p_vals[i2]:
+                drop_cols.add(fields[i2])
+            else:
+                drop_cols.add(v)
+
+    #     max_corr = corr_matrix.iloc[i, (i + 1):].max()
+    #     max = -1.
+    #     for i2, v2 in enumerate(x_fields[1:]):
+    #         if corr_matrix.iloc[i, i2].value >
+    #     max_corr = corr_matrix.iloc[i, (i+1):].max()
+    #     if max_corr >= max_corr_val:
+    #         drop_cols.add(v)
+    #
+    # # Iterates through Correlation Matrix Table to find correlated columns
+    # for i, v in enumerate(x_fields[:-1]):
+    #     max_corr = corr_matrix.iloc[i, (i+1):].max()
+    #     if max_corr >= max_corr_val:
+    #         drop_cols.add(v)
+
+    return_x_vals = [v for v in fields if v not in list(drop_cols)]
+    print('=== Drop of Highly-Correlated Variables is Complete ===')
+    print('Dropped Fields [{0}]: {1}'.format(len(drop_cols), list(drop_cols)))
+    print('Remaining Fields [{0}]: {1}'.format(len(return_x_vals), return_x_vals))
+    return return_x_vals
+
+
+def reduce_variance_pca(df: pd.DataFrame, field_names: list, explained_variance: float, mask: list=None):
+    print("Conducting PCA and pruning components above the desired explained variance ratio")
+    max_components = len(field_names) - 1
+    if explained_variance <= 0:
+        explained_variance = 0.99
+
+    pca_model = TruncatedSVD(n_components=max_components, random_state=555)
+    if mask:
+        pca_model.fit(df.loc[:, field_names])
+    else:
+        pca_model.fit(df.loc[mask, field_names])
+
+    x_results = pca_model.transform(df.loc[:, field_names]).T
+
+    # print(pca_model.components_)
+    print('PCA explained variance ratios.')
+    print(pca_model.explained_variance_ratio_)
+
+    x_names_pca = []
+    sum_variance = 0.
+    for idx, var in enumerate(pca_model.explained_variance_ratio_):
+        sum_variance += var
+        pca_name = 'pca_{0}'.format(idx)
+        df[pca_name] = x_results[idx]
+        x_names_pca.append(pca_name)
+        if sum_variance > explained_variance:
+            break
+
+    print('Explained variance retained: {0:.2f}'.format(sum_variance))
+    print('Number of PCA Fields: {0}'.format(len(x_names_pca)))
+    print('PCA Fields: {0}'.format(x_names_pca))
+    return df, x_names_pca

@@ -87,7 +87,8 @@ if do_predict_next_recession:
     next_recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
 if do_predict_recessions:
-    initial_models=['logit','etree_c','pass_agg_c','nearest_centroid','bernoulli_nb','gbc','svc','bernoulli_nb','ridge_c']
+    initial_models=['logit','etree_c','pass_agg_c','nearest_centroid','gbc','svc','bernoulli_nb','ridge_c']
+    # initial_models=['logit','etree_c']
     if max_variance < 1. or max_variables == 0:
         initial_models.extend(['neural_c','gauss_proc_c'])
 
