@@ -1412,7 +1412,11 @@ def get_decimals(vals: np.ndarray):
 def reduce_variance_corr(df: pd.DataFrame, fields: list, max_corr_val: float, y: Union[list, pd.Series, np.ndarray]):
     print('Removing one variable for each pair of variables with correlation greater than [{0}]'.format(max_corr_val))
     # Creates Correlation Matrix and Instantiates
-    corr_matrix = df[fields].corr()
+    corr_matrix = df[fields].corr(method='pearson')
+    for v in fields:
+        print('Field [{0}] Length: {1}'.format(v, len(df[v].unique())))
+        if len(df[v].unique()) <= 10:
+            print(df[v].unique())
     drop_cols = set()
     if max_corr_val <= 0.:
         max_corr_val = 0.8
