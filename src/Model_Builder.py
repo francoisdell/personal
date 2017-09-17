@@ -146,7 +146,9 @@ class Model_Builder:
                  cross_val_model=None,
                  use_test_set: bool=True,
                  auto_reg_periods: int=0,
-                 correlation_reduction: Union[dict, tuple]=(('method','corr'),('limit',0.95)) # 'corr' or 'pca'
+                 correlation_method: str='corr',
+                 correlation_max: float=0.95,
+                 correlation_significance_preference=True
                  ):
         
         self.df = df
@@ -171,8 +173,8 @@ class Model_Builder:
         self.s = Settings(report_name=report_name)
         self.use_test_set = use_test_set
         self.auto_reg_periods = auto_reg_periods
-        if correlation_reduction and not isinstance(correlation_reduction, dict):
-            self.correlation_reduction = dict(correlation_reduction)
+        self.correlation_method = correlation_method
+        self.correlation_max = correlation_max
 
     def predict(self) -> pd.DataFrame:
     
@@ -294,7 +296,7 @@ class Model_Builder:
                             y_train,
                             mask_train,
                             self.selection_limit,
-                            correlation_reduction=self.correlation_reduction)
+                            correlation_reduction=(self.correlation_method, self.correlation_max))
     
         pred_x_fields = dict()
         pred_x_mappings = dict()
@@ -390,7 +392,7 @@ class Model_Builder:
                                         y_train,
                                         mask_train,
                                         self.selection_limit,
-                                        correlation_reduction=self.correlation_reduction)
+                                        correlation_reduction=(self.correlation_method, self.correlation_max))
                 else:
                     pred_x_fields = {**pred_x_fields, **new_x_fields}
                     pred_x_mappings = {**pred_x_mappings, **new_x_mappings}
@@ -416,7 +418,7 @@ class Model_Builder:
                                 y_train,
                                 mask_train,
                                 self.selection_limit,
-                                correlation_reduction=self.correlation_reduction)
+                                correlation_reduction=(self.correlation_method, self.correlation_max))
 
             model, x_train = self.train_predictive_model(model,
                                                         self.retrain_model,
@@ -730,8 +732,7 @@ class Model_Builder:
 
         ### Remove Highly Correlated Variables (If Specified)###
         if correlation_reduction:
-            limit = correlation_reduction['limit']
-            method = correlation_reduction['method']
+            method, limit = correlation_reduction
             if 0 < limit < 1:
                 if method == 'corr':
                     columns = reduce_variance_corr(df=df[mask], fields=list(fields), max_corr_val=limit, y=y)
@@ -874,7 +875,7 @@ class Model_Builder:
                 clf = model.model_class
                 model.model_class = type(clf)
         else:
-            if model.model_class == 'rfor':
+            if model.model_class == 'rfor_c':
                 clf = RandomForestClassifier(n_estimators=31)
             elif model.model_class == 'rfor_r':
                 clf = RandomForestRegressor(n_estimators=31)
@@ -1131,7 +1132,7 @@ class Model_Builder:
                         model.grid_param_dict = grid_param_dict
                         model.x_columns = x_columns
                         for k, v in grid.cv_results_.items():
-                            if isinstance(v, (list)) and all([isinstance(v1, (float,complex,int,Number)) for v1 in v]):
+                            if isinstance(v, (list, np.ndarray)) and all([isinstance(v1, (float,complex,int,Number)) for v1 in v]):
                                 v = mean(v)
                             print('{0}\t: {1}'.format(k, v))
                     break
@@ -1412,11 +1413,11 @@ def get_decimals(vals: np.ndarray):
 def reduce_variance_corr(df: pd.DataFrame, fields: list, max_corr_val: float, y: Union[list, pd.Series, np.ndarray]):
     print('Removing one variable for each pair of variables with correlation greater than [{0}]'.format(max_corr_val))
     # Creates Correlation Matrix and Instantiates
-    corr_matrix = df[fields].corr(method='pearson')
-    for v in fields:
-        print('Field [{0}] Length: {1}'.format(v, len(df[v].unique())))
-        if len(df[v].unique()) <= 10:
-            print(df[v].unique())
+    corr_matrix = df[fields].astype(float).corr(method='pearson')
+    # for v in fields:
+        # print('Field [{0}] Length: {1}'.format(v, len(df[v].unique())))
+        # if len(df[v].unique()) <= 10:
+        #     print(df[v].unique())
     drop_cols = set()
     if max_corr_val <= 0.:
         max_corr_val = 0.8

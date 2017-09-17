@@ -17,6 +17,7 @@ import operator
 # import yahoo_finance
 from joblib import Parallel, delayed
 import itertools
+from sklearn import feature_selection as sk_feat_sel
 from statsmodels import robust
 from fredapi import Fred
 from matplotlib import pyplot as plt
@@ -43,15 +44,17 @@ finaldata_from_file = False  # Whether to load the final data (post-transformati
 do_predict_returns = False
 returns_predict_quarters_forward = [10]
 do_predict_recessions = True
-recession_predict_quarters_forward = [6]
+recession_predict_quarters_forward = [2, 4, 6, 8]
 do_predict_next_recession = False
 
 # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
 selection_limit = 5.0e-2
 
 interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
-correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
+correlation_type = None  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
 transform_vars = True
+trim_vars = False
+calc_trend_values = True
 
 # VARIANCE REDUCTION. Either PCA Variance or Correlation Limits
 variance_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
@@ -59,7 +62,7 @@ max_variance = 0  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a flo
 
 # DIMENSION REDUCTION. Either PCA Variance or Correlation Rankings
 dimension_method = 'corr'  # Use either None, 'corr' for correlations, or 'pca' for PCA
-max_variables = 0  # Options: 0 for 'auto' [n_obs ^ (4/5)] or an integer for a specific number of variables.
+max_variables = 0.85  # Options: 0 for 'auto' [n_obs ^ (4/5)] or an integer for a specific number of variables.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -87,17 +90,18 @@ if do_predict_next_recession:
     next_recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
 if do_predict_recessions:
-    initial_models=['logit','etree_c','nearest_centroid','gbc','bernoulli_nb','ridge_c'] # ,'svc', 'pass_agg_c'
+    initial_models=['logit','etree_c','nearest_centroid','gbc','bernoulli_nb','svc','pass_agg_c','rfor_c']
     # initial_models=['logit','etree_c']
     if max_variance < 1. or max_variables == 0:
-        initial_models.extend(['neural_c','gauss_proc_c'])
+        initial_models.extend(['gauss_proc_c'])
 
     # BEST MODELS: logit, svc, sgd_c, neural_c, gauss_proc_c
     # Overall best model: svc???
     final_models=['logit','svc','sgd_c']
     if (not final_include_data) or max_variance < 1. or max_variables == 0:
-        final_models.extend(['neural_c','gauss_proc_c'])
+        final_models.extend(['gauss_proc_c'])
 
+    # initial_models=['logit','etree_c','nearest_centroid','gbc','bernoulli_nb','svc','pass_agg_c','gauss_proc_c']
     recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
     # recession_models = ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','neural_c','gauss_proc_c'],
     #                               initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc'])
@@ -272,7 +276,7 @@ def predict_returns(df: pd.DataFrame,
           "\n-----------------------".format(quarters_forward))
 
     if quarters_forward > 0:
-        forward_y_field_name = '{0}_{1}yr'.format(y_field_name, quarters_forward)
+        forward_y_field_name = '{0}_{1}qtr'.format(y_field_name, quarters_forward)
         df[forward_y_field_name] = 1 - pd.Series(df[y_field_name].shift(quarters_forward) / df[y_field_name]).pow(
             1 / float(quarters_forward)).shift(-quarters_forward)
 
@@ -294,22 +298,23 @@ def predict_returns(df: pd.DataFrame,
     y_field = OrderedDict([(forward_y_field_name, 'num')])
     x_fields = OrderedDict([(v, 'num') for v in x_names])
 
-    report_name = 'returns_{0}yr_{1}'.format(quarters_forward, model_set)
-    m = Model_Builder(df
-                    , x_fields=x_fields
-                    , y_field=y_field
-                    , model_type=model_set
-                    , report_name=report_name
-                    , show_model_tests=True
-                    , retrain_model=True
-                    , selection_limit=selection_limit
-                    , predict_all=True
-                    , verbose=verbose
-                    , train_pct=train_pct
-                    , random_train_test=False
-                    , stack_include_preds=stack_include_preds
-                    , final_include_data=final_include_data
-                    , use_test_set=True)
+    report_name = 'returns_{0}qtr_{1}'.format(quarters_forward, model_set)
+    m = Model_Builder(df,
+                      x_fields=x_fields,
+                      y_field=y_field,
+                      model_type=model_set,
+                      report_name=report_name,
+                      show_model_tests=True,
+                      retrain_model=True,
+                      selection_limit=selection_limit,
+                      predict_all=True,
+                      verbose=verbose,
+                      train_pct=train_pct,
+                      random_train_test=False,
+                      stack_include_preds=stack_include_preds,
+                      final_include_data=final_include_data,
+                      correlation_max=0.95,
+                      use_test_set=True)
 
     for df, final_model_name in m.predict():
 
@@ -388,7 +393,7 @@ def predict_returns(df: pd.DataFrame,
         y_field_name_pred = '{0}_pred'.format(y_field_name)
         df[y_field_name_pred] = (df[y_field_name] * df[forward_y_field_name_pred].add(1).pow(quarters_forward)).shift(quarters_forward)
 
-        report_name = 'returns_{0}yr_{1}_{2}'.format(quarters_forward, model_set, final_model_name)
+        report_name = 'returns_{0}qtr_{1}_{2}'.format(quarters_forward, model_set, final_model_name)
 
         # if quarters_forward in [10]:
         chart(df
@@ -417,7 +422,7 @@ def predict_recession(df: pd.DataFrame
           "\n-----------------------".format(quarters_forward))
 
     if quarters_forward > 0:
-        forward_y_field_name = '{0}_{1}yr'.format(y_field_name, quarters_forward)
+        forward_y_field_name = '{0}_{1}qtr'.format(y_field_name, quarters_forward)
         df[forward_y_field_name] = df[y_field_name].shift(-quarters_forward)
 
     else:
@@ -436,25 +441,28 @@ def predict_recession(df: pd.DataFrame
     y_field = OrderedDict([(forward_y_field_name, 'cat')])
     x_fields = OrderedDict([(v, 'num') for v in x_names])
 
-    report_name = 'recession_{0}yr_{1}'.format(quarters_forward, model_set)
+    report_name = 'recession_{0}qtr_{1}'.format(quarters_forward, model_set)
 
-    m = Model_Builder(df
-                        , x_fields=x_fields
-                        , y_field=y_field
-                        , model_type=model_set
-                        , report_name=report_name
-                        , show_model_tests=True
-                        , retrain_model=False
-                        , selection_limit=selection_limit
-                        , predict_all=True
-                        , verbose=verbose
-                        , train_pct=train_pct
-                        , random_train_test=False
-                        , pca_explained_var=1.0
-                        , stack_include_preds=stack_include_preds
-                        , final_include_data=final_include_data
-                        , use_test_set=True
-                        )
+    m = Model_Builder(df,
+                      x_fields=x_fields,
+                      y_field=y_field,
+                      model_type=model_set,
+                      report_name=report_name,
+                      show_model_tests=True,
+                      retrain_model=False,
+                      selection_limit=selection_limit,
+                      predict_all=True,
+                      verbose=verbose,
+                      train_pct=train_pct,
+                      random_train_test=False,
+                      pca_explained_var=1.0,
+                      stack_include_preds=stack_include_preds,
+                      final_include_data=final_include_data,
+                      use_test_set=True,
+                      correlation_method='corr',
+                      correlation_max=0.95
+                      # cross_val_iters=(20,20),
+                      )
 
     for df, final_model_name in m.predict():
 
@@ -479,7 +487,7 @@ def predict_recession(df: pd.DataFrame
             df[y_prob_field_name] = df[y_prob_field_name].shift(quarters_forward)
             chart_y_field_names += [y_prob_field_name]
 
-        report_name = 'recession_{0}yr_{1}_{2}'.format(quarters_forward, model_set, final_model_name)
+        report_name = 'recession_{0}qtr_{1}_{2}'.format(quarters_forward, model_set, final_model_name)
         # if quarters_forward in [10]:
         chart(df
               , ys=[['sp500'], chart_y_field_names]
@@ -664,8 +672,8 @@ def shift_x_quarters(s: pd.Series, y: int):
     return s / s.shift(y)
 
 
-def impute_if_any_nulls(df, imputer=default_imputer):
-    if df.isnull().any().any():
+def impute_if_any_nulls(impute_df: pd.DataFrame, imputer: str=default_imputer):
+    if impute_df.isnull().any().any():
         print('Running imputation')
         try:
             if imputer == 'knnimpute':
@@ -675,13 +683,12 @@ def impute_if_any_nulls(df, imputer=default_imputer):
             # solver = fancyimpute.NuclearNormMinimization()
             # solver = fancyimpute.MatrixFactorization()
             # solver = fancyimpute.IterativeSVD()
-            df.loc[:, x_names] = solver.complete(df.loc[:, x_names].values)
+            impute_df = solver.complete(impute_df.values)
         except (ImportError, ValueError) as e:
             imputer = importlib.import_module("knnimpute")
-            df.loc[:, x_names] = imputer.knn_impute_with_argpartition(df.loc[:, x_names].values,
-                        missing_mask=np.isnan(df.loc[:, x_names].values), k=5)
+            impute_df = imputer.knn_impute_few_observed(impute_df.values, missing_mask=impute_df.isnull().values, k=5, verbose=verbose)
         # df = solver.complete(df.values)
-    return df
+    return impute_df
 
 
 
@@ -730,18 +737,17 @@ def get_level1_interactions(df: pd.DataFrame, x_names: list, min: float=0.1, max
 
 
 
-def get_diff_std_and_flags(df: pd.DataFrame
+def get_diff_std_and_flags(s: pd.Series
                            , field_name: str
-                           , groupby_fields: list=lambda x: True
                            , halflife: float=ewm_halflife
                            , stdev_qty: int=2)\
         -> (pd.DataFrame, list):
 
-    ewma_field_name = field_name + '_ewma'
-    if ewma_field_name not in df.columns:
-        df[ewma_field_name] = df[field_name].ewm(halflife=ewm_halflife).mean()
-
+    d = s.to_frame(name=field_name)
+    new_name_ewma = field_name + '_ewma'
+    new_name_std = field_name + '_std'
     new_name_prefix = field_name + '_val_to_ewma'
+    new_name_std_from_ewma = field_name + '_std_from_ewma'
     new_name_diff = new_name_prefix + '_diff'
     new_name_diff_std = new_name_prefix + '_diff_std'
     new_name_add_std = new_name_prefix + '_add_std'
@@ -749,17 +755,56 @@ def get_diff_std_and_flags(df: pd.DataFrame
     new_name_trend_rise = new_name_prefix + '_trend_rise_flag'
     new_name_trend_fall = new_name_prefix + '_trend_fall_flag'
 
-    df[new_name_diff] = df[field_name] - df[ewma_field_name]
-    df[new_name_diff_std] = df.groupby(by=[groupby_fields])[new_name_diff].apply(lambda x: x.ewm(halflife=halflife).std(bias=False))
-    df[new_name_add_std] = df[ewma_field_name] + (stdev_qty * df[new_name_diff_std])
-    df[new_name_sub_std] = df[ewma_field_name] - (stdev_qty * df[new_name_diff_std])
-    df[new_name_sub_std] = df[new_name_sub_std].clip(lower=0)
-    df[new_name_trend_rise] = df[field_name].values < df[new_name_sub_std].values
-    df[new_name_trend_fall] = df[field_name].values > df[new_name_add_std].values
+    if new_name_ewma not in d.columns:
+        # d[ewma_field_name] = d[field_name].ewm(halflife=ewm_halflife).mean()
+        d[new_name_ewma] = d[field_name].ewm(halflife=halflife).mean()
+    d[new_name_std] = d[field_name].ewm(halflife=halflife).std(bias=False)
+    d[new_name_diff] = d[field_name] - d[new_name_ewma]
+    d[new_name_diff_std] = d[new_name_diff].ewm(halflife=halflife).std(bias=False)
+    d[new_name_add_std] = d[new_name_ewma] + (stdev_qty * d[new_name_diff_std])
+    d[new_name_sub_std] = d[new_name_ewma] - (stdev_qty * d[new_name_diff_std])
+    d[new_name_sub_std] = d[new_name_sub_std].clip(lower=0)
+    d[new_name_std_from_ewma] = (d[field_name] - d[new_name_ewma]) / d[new_name_std]
+    d[new_name_trend_rise] = d[field_name].values > d[new_name_add_std].values
+    d[new_name_trend_fall] = d[field_name].values < d[new_name_sub_std].values
 
-    return df, [new_name_diff, new_name_diff_std, new_name_add_std, new_name_sub_std
-        , new_name_trend_rise, new_name_trend_fall]
+    ema_df = pd.DataFrame()
+    new_name_trend_strength = field_name + '_trend_strength'
+    for h, exp in [(halflife*exp, exp) for exp in range(1, 17)]:
+        ema_df[exp] = d[field_name].ewm(halflife=h).mean()
+        ema_df[exp] = ema_df[exp] / ema_df[exp].shift(1).fillna(1)
+    neg = np.sum((ema_df.values < 1), axis=1)
+    pos = np.sum((ema_df.values > 1), axis=1)
+    d[new_name_trend_strength] = pos - neg
+    return d, [new_name_diff, new_name_diff_std, new_name_add_std, new_name_sub_std, new_name_std_from_ewma,
+               new_name_trend_strength, new_name_trend_rise, new_name_trend_fall]
 
+
+def get_trend_variables(s: pd.Series,
+                        field_name: str,
+                        halflife: float=ewm_halflife)\
+        -> (pd.DataFrame, list):
+
+    d = s.to_frame(name=field_name)
+    new_name_ewma = field_name + '_ewma'
+    new_name_std = field_name + '_std'
+    new_name_std_from_ewma = field_name + '_std_from_ewma'
+
+    d[new_name_ewma] = d[field_name].ewm(halflife=halflife).mean()
+    d[new_name_std] = d[field_name].ewm(halflife=halflife).std(bias=False)
+    d[new_name_std_from_ewma] = (d[field_name] - d[new_name_ewma]) / d[new_name_std]
+
+    ema_df = pd.DataFrame()
+    new_name_trend_strength = field_name + '_trend_strength'
+    index_range = range(1,17)
+    range_len = len(list(index_range))
+    for h, exp in [(halflife*exp, exp) for exp in range(1, 17)]:
+        ema_df[exp] = d[field_name].ewm(halflife=h).mean()
+        ema_df[exp] = ema_df[exp] / ema_df[exp].shift(1).fillna(1)
+    neg = np.sum((ema_df.values < 1), axis=1)
+    pos = np.sum((ema_df.values > 1), axis=1)
+    d[new_name_trend_strength] = ((pos - neg) + range_len) / (2*range_len)  # creates an index, 0-1, of trend strength
+    return d, [new_name_std_from_ewma, new_name_trend_strength]
 
 def time_since_last_true(s: pd.Series) -> pd.Series:
     s.iloc[0] = prev_val = s.value_counts()[False] / 2 / s.value_counts()[True]
@@ -836,8 +881,10 @@ def trim_outliers(y: pd.Series, thresh=4):
 def reduce_vars_corr(df: pd.DataFrame, field_names: list, max_num: float):
     num_vars = len(field_names)-1
     print('Current vars:  {0}'.format(num_vars))
-    if not max_num or max_num == 0:
-        max_num = int(np.power(df.shape[0], 0.8))
+    if not max_num or max_num < 1:
+        if max_num == 0:
+            max_num = 0.75
+        max_num = int(np.power(df.shape[0], max_num))
 
     print('Max allowed vars: {0}'.format(max_num))
 
@@ -859,7 +906,7 @@ def reduce_vars_pca(df: pd.DataFrame, field_names: list, max_num: Union[int,floa
     num_vars = len(field_names)-1
     print('Current vars: {0}'.format(num_vars))
     if not max_num or max_num == 0:
-        max_num = int(np.power(df.shape[0], 0.6))
+        max_num = int(np.power(df.shape[0], 0.7))
 
     print('Max allowed vars: {0}'.format(max_num))
 
@@ -888,23 +935,34 @@ def reduce_vars_pca(df: pd.DataFrame, field_names: list, max_num: Union[int,floa
     return df, field_names
 
 
-def reduce_variance_corr(df: pd.DataFrame, x_fields: list, max_corr_val: float):
+def reduce_variance_corr(df: pd.DataFrame, fields: list, max_corr_val: float, y: Union[list, pd.Series, np.ndarray]):
     print('Removing one variable for each pair of variables with correlation greater than [{0}]'.format(max_corr_val))
     # Creates Correlation Matrix and Instantiates
-    corr_matrix = df.loc[:, x_fields].corr()
+    corr_matrix = df[fields].astype(float).corr(method='pearson')
     drop_cols = set()
-    if max_corr_val <= 0:
+    if max_corr_val <= 0.:
         max_corr_val = 0.8
 
-    # Iterates through Correlation Matrix Table to find correlated columns
-    for i, v in enumerate(x_fields[:-1]):
-        max_corr = corr_matrix.iloc[i, (i+1):].max()
-        if max_corr >= max_corr_val:
-            drop_cols.add(v)
+    # Determine the p-values of the dataset and when a field must be dropped, prefer the field with the higher p-value
+    if len(np.unique(y)) == 2:
+        scores, p_vals = sk_feat_sel.f_classif(df[fields], y)
+    else:
+        scores, p_vals = sk_feat_sel.f_regression(df[fields], y)
 
-    return_x_vals = [v for v in x_fields if v not in list(drop_cols)]
-    print('Number of Remaining Fields: {0}'.format(len(return_x_vals)))
-    print('Remaining Fields: {0}'.format(return_x_vals))
+    # Iterates through Correlation Matrix Table to find correlated columns
+    for i, v in enumerate(fields[:-1]):
+        i2, c = sorted([(i2+1, v2) for i2, v2 in enumerate(corr_matrix.iloc[i, i+1:])], key=lambda tup: tup[1])[-1]
+
+        if c > max_corr_val:
+            if p_vals[i] <= p_vals[i2]:
+                drop_cols.add(fields[i2])
+            else:
+                drop_cols.add(v)
+
+    return_x_vals = [v for v in fields if v not in list(drop_cols)]
+    print('=== Drop of Highly-Correlated Variables is Complete ===')
+    print('Dropped Fields [{0}]: {1}'.format(len(drop_cols), list(drop_cols)))
+    print('Remaining Fields [{0}]: {1}'.format(len(return_x_vals), return_x_vals))
     return return_x_vals
 
 
@@ -1209,11 +1267,11 @@ except Exception as e:
     else:
         x_names = [
             'equity_alloc'
-            # , 'tsy_10yr_yield' # Treasury prices have been generally increasing over the time period. Don't use.
-            # , 'tsy_5yr_yield' # Treasury prices have been generally increasing over the time period. Don't use.
-            # , 'tsy_3mo_yield' # Treasury prices have been generally increasing over the time period. Don't use.
+            , 'tsy_10yr_yield' # Treasury prices have been generally increasing over the time period. Don't use.
+            , 'tsy_5yr_yield' # Treasury prices have been generally increasing over the time period. Don't use.
+            , 'tsy_3mo_yield' # Treasury prices have been generally increasing over the time period. Don't use.
             # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
-            # , 'unempl_rate'
+            , 'unempl_rate'
             # , 'empl_construction'  # Construction employees heave been generally increasing over the time period. Don't use.
             , 'sp500_peratio'
             , 'capacity_util_mfg'
@@ -1237,7 +1295,7 @@ except Exception as e:
             , 'mzm_velocity'
             , 'm2_velocity'
             , 'm1_velocity'
-            , 'wrk_age_pop'
+            , 'employment_pop_ratio'
         ]
 
     empty_cols = [c for c in df.columns.values if all(df[c].isnull())]
@@ -1254,7 +1312,25 @@ except Exception as e:
     # non_null_mask = ~pd.isnull(df.loc[:, x_names]).any(axis=1).values  # Periods where ANY data points exist
     df = df.loc[non_null_mask, :]
 
+    ##########################################################################################################
+    # Derive trend metric variables
+    ##########################################################################################################
+    if calc_trend_values:
+        print('Deriving special predictor variables.')
 
+        # Add x-variables for time since the last rise, and time since the last fall, in the SP500
+        # for x in ['sp500']:
+        for x in x_names.copy():
+            temp_df, new_x_names = get_trend_variables(df[x], x)
+
+            # print(new_x_names)
+            df = df.join(temp_df[new_x_names], how='inner')
+            x_names.extend(new_x_names)
+
+
+    ##########################################################################################################
+    # Derive difference variables to demonstrate changes from period to period
+    ##########################################################################################################
     print('Adding x-year diff terms.')
     diff_x_names = [
         'gdp_nom'
@@ -1300,8 +1376,8 @@ except Exception as e:
     # Interactions between each x value and its previous values
     ##########################################################################################################
     for name in diff_x_names:
-        for y in [1]:
-            diff_field_name = '{0}_{1}yr_diff'.format(name, y)
+        for y in [6]:
+            diff_field_name = '{0}_{1}qtr_diff'.format(name, y)
             df[diff_field_name] = shift_x_quarters(df[name].pow(1./2.), y)
             # df[diff_field_name] = shift_x_quarters(df[name].apply(np.log, args=(1.5,)), y)
             x_names.append(diff_field_name)
@@ -1346,14 +1422,15 @@ except Exception as e:
     ##########################################################################################################
     # Trim all x fields to a threshold of 4 STDs
     ##########################################################################################################
-    print('Converting fields to trimmed fields.')
-    new_x_names = []
-    for v in x_names:
-        new_field_name = v + '_trim'
-        if new_field_name not in df.columns.values:
-            df[new_field_name] = trim_outliers(df[v], thresh=4)
-        new_x_names.append(new_field_name)
-    x_names = new_x_names
+    if trim_vars:
+        print('Converting fields to trimmed fields.')
+        new_x_names = []
+        for v in x_names:
+            new_field_name = v + '_trim'
+            if new_field_name not in df.columns.values:
+                df[new_field_name] = trim_outliers(df[v], thresh=4)
+            new_x_names.append(new_field_name)
+        x_names = new_x_names
 
     ##########################################################################################################
     # Value Imputation
@@ -1398,13 +1475,21 @@ except Exception as e:
     ##########################################################################################################
     # Create squared and squared-root versions of all the x fields
     ##########################################################################################################
-    # Generate all possible combinations of the imput variables.
     if transform_vars:
         print('Creating squared and square root varieties of predictor variables')
-        operations = [('pow2', math.pow, (2,)), ('sqrt', math.sqrt, None)]
+        from scipy import stats
+        operations = dict((
+                          ('pow2', (math.pow, (2,))),
+                          ('sqrt', (math.sqrt, None)),
+                          # ('log2', (math.log2, None)),
+                          # ('boxcox',(stats.boxcox, None)),
+                           ))
         new_x_names = []
         for v in x_names:
-            for suffix, op, var in operations:
+            df[v] = df[v].astype(float)
+            # boxcox_lambda = stats.boxcox_normmax(df[v].values)
+            # operations['boxcox'] = (stats.boxcox,(boxcox_lambda,))
+            for suffix, (op, var) in operations.items():
                 new_x_name = '{0}_{1}'.format(v, suffix)
                 df[new_x_name] = df[v].abs().apply(op, args=var) * df[v].apply(lambda x: -1 if x < 0 else 1)
                 new_x_names.append(new_x_name)
@@ -1432,21 +1517,6 @@ except Exception as e:
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
-    # Derive special predictor variables
-    ##########################################################################################################
-    print('Deriving special predictor variables.')
-
-    # Add x-variables for time since the last rise, and time since the last fall, in the SP500
-    df, new_x_names = get_diff_std_and_flags(df, 'sp500')
-    # x_names.extend(new_x_names)
-    sp500_qtr_since_rise = 'sp500_time_since_prev_rise'
-    df[sp500_qtr_since_rise] = time_since_last_true(df[new_x_names[-2]])
-    x_names.append(sp500_qtr_since_rise)
-    sp500_qtr_since_fall = 'sp500_time_since_prev_fall'
-    df[sp500_qtr_since_fall] = time_since_last_true(df[new_x_names[-1]])
-    x_names.append(sp500_qtr_since_fall)
-
-    ##########################################################################################################
     # Add x-variable for time since the last recession. Create y-variable for time until the next recession.
     ##########################################################################################################
     last_rec = -1
@@ -1464,10 +1534,10 @@ except Exception as e:
     # print(*df.index.values, sep='\n')
 
     if do_predict_next_recession:
-        df[x_names+[next_rec_field_name]] = impute_if_any_nulls(df=df[x_names+[next_rec_field_name]], imputer=default_imputer)
+        df[x_names+[next_rec_field_name]] = impute_if_any_nulls(df[x_names+[next_rec_field_name]], imputer=default_imputer)
     else:
-        x_names.append(next_rec_field_name)
-        df[x_names] = impute_if_any_nulls(df=df[x_names], imputer=default_imputer)
+        # x_names.append(next_rec_field_name)
+        df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
 
     ################################################################################################################
     # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
@@ -1490,6 +1560,30 @@ except Exception as e:
         elif variance_method == 'pca':
             df, x_names = reduce_variance_pca(df=df, field_names=x_names, explained_variance=max_variance)
         print('X Names Length: {0}'.format(len(x_names)))
+
+    ##########################################################################################################
+    # Derive special predictor variables
+    ##########################################################################################################
+    if calc_trend_values:
+        print('Deriving special predictor variables for y variable.')
+
+        # Add x-variables for time since the last rise, and time since the last fall, in the SP500
+        for x in [sp_field_name]:
+            temp_df, new_x_names = get_diff_std_and_flags(df[x], x)
+
+            sp500_qtr_since_fall = '{0}_time_since_prev_fall'.format(x_names)
+            df[sp500_qtr_since_fall] = time_since_last_true(temp_df[new_x_names[-1]])
+            x_names.append(sp500_qtr_since_fall)
+
+            sp500_qtr_since_rise = '{0}_time_since_prev_rise'.format(x_names)
+            df[sp500_qtr_since_rise] = time_since_last_true(temp_df[new_x_names[-2]])
+            x_names.append(sp500_qtr_since_rise)
+
+            print(new_x_names[-4:-2])
+            df = df.join(temp_df[new_x_names[-4:-2]], how='inner')
+            x_names.extend(new_x_names[-4:-2])
+
+        df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
 
 for n in x_names:
     if df[n].isnull().any():
