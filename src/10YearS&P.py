@@ -54,16 +54,16 @@ interaction_type = 'level_1'  # Specify whether to derive pairwise interaction v
 correlation_type = None  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
 transform_vars = True
 trim_vars = False
-calc_trend_values = False
+calc_trend_values = True
 calc_std_values = True
 
 # VARIANCE REDUCTION. Either PCA Variance or Correlation Limits
-variance_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
-max_variance = 0  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
+correlation_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
+max_correlation = 0  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
 
 # DIMENSION REDUCTION. Either PCA Variance or Correlation Rankings
 dimension_method = 'corr'  # Use either None, 'corr' for correlations, or 'pca' for PCA
-max_variables = 0.85  # Options: 0 for 'auto' [n_obs ^ (4/5)] or an integer for a specific number of variables.
+max_variables = 0.5  # Options: 0 for 'auto' [n_obs ^ (1/2)] or an integer for a specific number of variables.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -83,7 +83,7 @@ final_include_data = False
 
 if do_predict_next_recession:
     initial_models = ['rfor_r','gbr','elastic_net','knn_r','svr']
-    if max_variance < 1. or max_variables == 0:
+    if max_correlation < 1. or max_variables == 0:
         initial_models.extend(['neural_r','gauss_proc_r'])
 
     final_models = ['elastic_net_stacking']
@@ -91,15 +91,15 @@ if do_predict_next_recession:
     next_recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
 if do_predict_recessions:
-    initial_models=['logit','etree_c','nearest_centroid','gbc','bernoulli_nb','svc','pass_agg_c','rfor_c']
+    initial_models=['logit','etree_c','nearest_centroid','gbc','bernoulli_nb','svc','rfor_c'] # pass_agg_c
     # initial_models=['logit','etree_c']
-    if max_variance < 1. or max_variables == 0:
+    if max_correlation < 1. or max_variables == 0:
         initial_models.extend(['gauss_proc_c'])
 
     # BEST MODELS: logit, svc, sgd_c, neural_c, gauss_proc_c
     # Overall best model: svc???
     final_models=['logit','svc','sgd_c']
-    if (not final_include_data) or max_variance < 1. or max_variables == 0:
+    if (not final_include_data) or max_correlation < 1. or max_variables == 0:
         final_models.extend(['gauss_proc_c'])
 
     # initial_models=['logit','etree_c','nearest_centroid','gbc','bernoulli_nb','svc','pass_agg_c','gauss_proc_c']
@@ -110,11 +110,11 @@ if do_predict_recessions:
 
 if do_predict_returns:
     initial_models = ['rfor_r','gbr','pass_agg_r','elastic_net','knn_r','ridge_r','svr']
-    if max_variance < 1. or max_variables == 0:
+    if max_correlation < 1. or max_variables == 0:
         initial_models.extend(['gauss_proc_r'])
 
     final_models = ['elastic_net_stacking','ridge_r','linreg','svr']
-    if (not final_include_data) or max_variance < 1. or max_variables == 0:
+    if (not final_include_data) or max_correlation < 1. or max_variables == 0:
         final_models.extend(['gauss_proc_r'])
 
     returns_models = ModelSet(final_models=final_models, initial_models=initial_models)
@@ -380,7 +380,7 @@ def predict_returns(df: pd.DataFrame,
         print('Mixed vs. Treasury Strat: %.2f' % (final_return_strat_mixed / final_return_strat_tsy))
 
         forward_y_field_name_pred_fut = forward_y_field_name_pred + '_fut'
-        df[forward_y_field_name_pred_fut] = df[forward_y_field_name_pred].astype(np.float64)
+        df[forward_y_field_name_pred_fut] = df[forward_y_field_name_pred].astype(np.float16)
         df[forward_y_field_name_pred_fut][train_mask] = np.nan
 
         print(max(df.index))
@@ -804,7 +804,7 @@ def get_trend_variables(s: pd.Series,
     return d, [new_name_trend_strength, new_name_trend_strength_weighted]
 
 
-def get_std_from_ewma(s: pd.Series, field_name: str, alpha: float=0.9) -> (pd.DataFrame, list):
+def get_std_from_ewma(s: pd.Series, field_name: str, alpha: float=0.9375) -> (pd.DataFrame, list):
 
     d = s.to_frame(name=field_name)
 
@@ -840,7 +840,7 @@ def get_level1_correlations(df: pd.DataFrame, x_names: list, top_n: int=-1):
             interaction_field_name = '{0}_corr_{1}'.format(v, v1)
             if interaction_field_name not in df.columns.values:
                 # s = pd.ewmcorr(df[v], df[v1], alpha=ewm_alpha)
-                s = df[v].ewm(alpha=ewm_alpha).corr(other=df[v1])
+                s = df[v].ewm(alpha=ewm_alpha).corr(other=df[v1]).round(4)
                 # s = df[v].apply(lambda x: x.fillna(0).ewm(alpha=ewm_alpha).corr(other=df[v1]))
             else:
                 s = df[interaction_field_name]
@@ -1587,11 +1587,11 @@ except Exception as e:
     # VARIANCE REDUCTION: Remove any highly correlated fields and/or use pca to eliminate correlation.
     ##########################################################################################################
 
-    if (variance_method is not None) and max_variance < 1. and dimension_method != 'pca':
+    if (correlation_method is not None) and max_correlation < 1. and dimension_method != 'pca':
         if dimension_method == 'corr':
-            x_names = reduce_variance_corr(df=df, x_fields=x_names, max_corr_val=max_variance)
-        elif variance_method == 'pca':
-            df, x_names = reduce_variance_pca(df=df, field_names=x_names, explained_variance=max_variance)
+            x_names = reduce_variance_corr(df=df, x_fields=x_names, max_corr_val=max_correlation)
+        elif correlation_method == 'pca':
+            df, x_names = reduce_variance_pca(df=df, field_names=x_names, explained_variance=max_correlation)
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################

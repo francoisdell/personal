@@ -792,7 +792,7 @@ class Model_Builder:
         try:
             obj.fit(x, y)
         except (TypeError, ValueError) as e:
-            if "dense" in str(e):
+            if "dense" in str(e) and 'overflow' not in str(e):
                 x = x.toarray()
                 self.use_sparse = False
                 obj.fit(x, y)
@@ -1286,9 +1286,9 @@ class Model_Builder:
             elif t == 'num':
                 df[f + '_t'] = trained_models[f].transform(df[f]
                                 .apply(pd.to_numeric, errors='coerce')
-                                .round(4).fillna(0).values.reshape(-1,1))
+                                .round(3).fillna(0).values.reshape(-1,1))
                 if is_y:
-                    matrix = df[f + '_t'].astype(np.float64).values.transpose()
+                    matrix = df[f + '_t'].astype(np.float16).values.transpose() # Original was float64
     
                     if isinstance(trained_models[f], sk_prep.MinMaxScaler):
                         matrix = np.minimum(1, np.maximum(0, fix_np_nan(matrix)))
