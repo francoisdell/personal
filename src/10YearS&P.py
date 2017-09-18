@@ -42,7 +42,7 @@ finaldata_from_file = False  # Whether to load the final data (post-transformati
 
 # Do you want to predict returns? Or Recessions?
 do_predict_returns = False
-returns_predict_quarters_forward = [10]
+returns_predict_quarters_forward = [4, 40]
 do_predict_recessions = True
 recession_predict_quarters_forward = [2, 4, 6, 8]
 do_predict_next_recession = False
@@ -54,7 +54,8 @@ interaction_type = 'level_1'  # Specify whether to derive pairwise interaction v
 correlation_type = None  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
 transform_vars = True
 trim_vars = False
-calc_trend_values = True
+calc_trend_values = False
+calc_std_values = True
 
 # VARIANCE REDUCTION. Either PCA Variance or Correlation Limits
 variance_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
@@ -75,7 +76,7 @@ prev_rec_field_name = 'recession_usa_time_since_prev'
 next_rec_field_name = 'recession_usa_time_until_next'
 verbose = False
 fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
-ewm_halflife = 4.2655*2  # Halflife for EWM calculations. 4.2655 corresponds to a 0.125 weight.
+ewm_alpha = 0.875  # Halflife for EWM calculations. 4.2655 corresponds to a 0.125 weight.
 default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster, if less ideal.
 stack_include_preds = False
 final_include_data = False
@@ -110,11 +111,11 @@ if do_predict_recessions:
 if do_predict_returns:
     initial_models = ['rfor_r','gbr','pass_agg_r','elastic_net','knn_r','ridge_r','svr']
     if max_variance < 1. or max_variables == 0:
-        initial_models.extend(['neural_r','gauss_proc_r'])
+        initial_models.extend(['gauss_proc_r'])
 
     final_models = ['elastic_net_stacking','ridge_r','linreg','svr']
     if (not final_include_data) or max_variance < 1. or max_variables == 0:
-        final_models.extend(['neural_r','gauss_proc_r'])
+        final_models.extend(['gauss_proc_r'])
 
     returns_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
@@ -730,7 +731,7 @@ def get_level1_interactions(df: pd.DataFrame, x_names: list, min: float=0.1, max
 
                 # Interactions between two different fields, generated through exponentiall weighted correlations
                 # interaction_field_name = '{0}_corr_{1}'.format(v, v1)
-                # df[interaction_field_name] = df[v].ewm(halflife=ewm_halflife).corr(other=df[v1])
+                # df[interaction_field_name] = df[v].ewm(alpha=ewm_alpha).corr(other=df[v1])
                 # new_x_names.append(interaction_field_name)
 
     return df, new_x_names
@@ -739,7 +740,7 @@ def get_level1_interactions(df: pd.DataFrame, x_names: list, min: float=0.1, max
 
 def get_diff_std_and_flags(s: pd.Series
                            , field_name: str
-                           , halflife: float=ewm_halflife
+                           , alpha: float=ewm_alpha
                            , stdev_qty: int=2)\
         -> (pd.DataFrame, list):
 
@@ -747,7 +748,6 @@ def get_diff_std_and_flags(s: pd.Series
     new_name_ewma = field_name + '_ewma'
     new_name_std = field_name + '_std'
     new_name_prefix = field_name + '_val_to_ewma'
-    new_name_std_from_ewma = field_name + '_std_from_ewma'
     new_name_diff = new_name_prefix + '_diff'
     new_name_diff_std = new_name_prefix + '_diff_std'
     new_name_add_std = new_name_prefix + '_add_std'
@@ -756,55 +756,67 @@ def get_diff_std_and_flags(s: pd.Series
     new_name_trend_fall = new_name_prefix + '_trend_fall_flag'
 
     if new_name_ewma not in d.columns:
-        # d[ewma_field_name] = d[field_name].ewm(halflife=ewm_halflife).mean()
-        d[new_name_ewma] = d[field_name].ewm(halflife=halflife).mean()
-    d[new_name_std] = d[field_name].ewm(halflife=halflife).std(bias=False)
+        # d[ewma_field_name] = d[field_name].ewm(alpha=ewm_alpha).mean()
+        d[new_name_ewma] = d[field_name].ewm(alpha=alpha).mean()
+    d[new_name_std] = d[field_name].ewm(alpha=alpha).std(bias=False)
     d[new_name_diff] = d[field_name] - d[new_name_ewma]
-    d[new_name_diff_std] = d[new_name_diff].ewm(halflife=halflife).std(bias=False)
+    d[new_name_diff_std] = d[new_name_diff].ewm(alpha=alpha).std(bias=False)
     d[new_name_add_std] = d[new_name_ewma] + (stdev_qty * d[new_name_diff_std])
     d[new_name_sub_std] = d[new_name_ewma] - (stdev_qty * d[new_name_diff_std])
     d[new_name_sub_std] = d[new_name_sub_std].clip(lower=0)
-    d[new_name_std_from_ewma] = (d[field_name] - d[new_name_ewma]) / d[new_name_std]
     d[new_name_trend_rise] = d[field_name].values > d[new_name_add_std].values
     d[new_name_trend_fall] = d[field_name].values < d[new_name_sub_std].values
 
-    ema_df = pd.DataFrame()
-    new_name_trend_strength = field_name + '_trend_strength'
-    for h, exp in [(halflife*exp, exp) for exp in range(1, 17)]:
-        ema_df[exp] = d[field_name].ewm(halflife=h).mean()
-        ema_df[exp] = ema_df[exp] / ema_df[exp].shift(1).fillna(1)
-    neg = np.sum((ema_df.values < 1), axis=1)
-    pos = np.sum((ema_df.values > 1), axis=1)
-    d[new_name_trend_strength] = pos - neg
-    return d, [new_name_diff, new_name_diff_std, new_name_add_std, new_name_sub_std, new_name_std_from_ewma,
-               new_name_trend_strength, new_name_trend_rise, new_name_trend_fall]
+    return d, [new_name_diff, new_name_diff_std, new_name_add_std, new_name_sub_std, new_name_trend_rise, new_name_trend_fall]
 
 
 def get_trend_variables(s: pd.Series,
                         field_name: str,
-                        halflife: float=ewm_halflife)\
+                        alpha: float=0.75)\
         -> (pd.DataFrame, list):
 
     d = s.to_frame(name=field_name)
+
+    ema_df = pd.DataFrame()
+    new_name_trend_strength = field_name + '_trend_strength'
+    new_name_trend_strength_weighted = field_name + '_trend_strength_weighted'
+
+    range_len = 17
+    index_range = range(1, range_len)
+    for exp in index_range:
+        h1 = 1-((1-alpha)*(1/exp))
+        h2 = 1-((1-alpha)*(1/exp+1))
+        ema1 = d[field_name].ewm(alpha=h1).mean()
+        ema2 = d[field_name].ewm(alpha=h2).mean()
+        ema_df[str(exp)] = ema1 / ema2
+        # ema_df[col_name] = (ema_df[col_name] / ema_df[col_name].shift(1)).fillna(1)
+    # for exp in range(1, 17):
+    #     ema_df[str(exp)] = d[field_name].rolling(exp*2).mean()
+    #     ema_df[str(exp)] = (ema_df[str(exp)] / ema_df[str(exp)].shift(1)).fillna(1)
+
+    # weights = [2**(v-1) for v in index_range]
+    weights = [v for v in index_range]
+    weights = pd.Series(list(map(lambda x: x / sum(weights), weights)), index=ema_df.columns.values)
+    d[new_name_trend_strength_weighted] = ema_df.subtract(-1).dot(weights)
+    neg = np.sum((ema_df.values < 1), axis=1)
+    pos = np.sum((ema_df.values > 1), axis=1)
+    d[new_name_trend_strength] = ((pos - neg) + range_len) / (2*range_len)  # creates an index, 0-1, of trend strength
+    return d, [new_name_trend_strength, new_name_trend_strength_weighted]
+
+
+def get_std_from_ewma(s: pd.Series, field_name: str, alpha: float=0.9) -> (pd.DataFrame, list):
+
+    d = s.to_frame(name=field_name)
+
     new_name_ewma = field_name + '_ewma'
     new_name_std = field_name + '_std'
     new_name_std_from_ewma = field_name + '_std_from_ewma'
 
-    d[new_name_ewma] = d[field_name].ewm(halflife=halflife).mean()
-    d[new_name_std] = d[field_name].ewm(halflife=halflife).std(bias=False)
+    d[new_name_ewma] = d[field_name].ewm(alpha=alpha).mean()
+    d[new_name_std] = d[field_name].ewm(alpha=alpha).std(bias=False)
     d[new_name_std_from_ewma] = (d[field_name] - d[new_name_ewma]) / d[new_name_std]
+    return d, [new_name_std_from_ewma]
 
-    ema_df = pd.DataFrame()
-    new_name_trend_strength = field_name + '_trend_strength'
-    index_range = range(1,17)
-    range_len = len(list(index_range))
-    for h, exp in [(halflife*exp, exp) for exp in range(1, 17)]:
-        ema_df[exp] = d[field_name].ewm(halflife=h).mean()
-        ema_df[exp] = ema_df[exp] / ema_df[exp].shift(1).fillna(1)
-    neg = np.sum((ema_df.values < 1), axis=1)
-    pos = np.sum((ema_df.values > 1), axis=1)
-    d[new_name_trend_strength] = ((pos - neg) + range_len) / (2*range_len)  # creates an index, 0-1, of trend strength
-    return d, [new_name_std_from_ewma, new_name_trend_strength]
 
 def time_since_last_true(s: pd.Series) -> pd.Series:
     s.iloc[0] = prev_val = s.value_counts()[False] / 2 / s.value_counts()[True]
@@ -827,9 +839,9 @@ def get_level1_correlations(df: pd.DataFrame, x_names: list, top_n: int=-1):
             # Interactions between two different fields, generated through exponentiall weighted correlations
             interaction_field_name = '{0}_corr_{1}'.format(v, v1)
             if interaction_field_name not in df.columns.values:
-                # s = pd.ewmcorr(df[v], df[v1], halflife=ewm_halflife)
-                s = df[v].ewm(halflife=ewm_halflife).corr(other=df[v1])
-                # s = df[v].apply(lambda x: x.fillna(0).ewm(halflife=ewm_halflife).corr(other=df[v1]))
+                # s = pd.ewmcorr(df[v], df[v1], alpha=ewm_alpha)
+                s = df[v].ewm(alpha=ewm_alpha).corr(other=df[v1])
+                # s = df[v].apply(lambda x: x.fillna(0).ewm(alpha=ewm_alpha).corr(other=df[v1]))
             else:
                 s = df[interaction_field_name]
             d[interaction_field_name] = (s, s.var())
@@ -1315,9 +1327,9 @@ except Exception as e:
     ##########################################################################################################
     # Derive trend metric variables
     ##########################################################################################################
+    trend_x_names = []
     if calc_trend_values:
-        print('Deriving special predictor variables.')
-
+        print('Deriving trend variables.')
         # Add x-variables for time since the last rise, and time since the last fall, in the SP500
         # for x in ['sp500']:
         for x in x_names.copy():
@@ -1325,8 +1337,19 @@ except Exception as e:
 
             # print(new_x_names)
             df = df.join(temp_df[new_x_names], how='inner')
-            x_names.extend(new_x_names)
+            trend_x_names.extend(new_x_names)
 
+    if calc_std_values:
+        print('Deriving STD values.')
+
+        # Add x-variables for time since the last rise, and time since the last fall, in the SP500
+        # for x in ['sp500']:
+        for x in x_names.copy():
+            temp_df, new_x_names = get_std_from_ewma(df[x], x)
+
+            # print(new_x_names)
+            df = df.join(temp_df[new_x_names], how='inner')
+            trend_x_names.extend(new_x_names)
 
     ##########################################################################################################
     # Derive difference variables to demonstrate changes from period to period
@@ -1415,7 +1438,7 @@ except Exception as e:
     for v in x_names:
         new_field_name = v + '_ewma'
         if new_field_name not in df.columns.values:
-            df[new_field_name] = df[v].ewm(halflife=ewm_halflife).mean()
+            df[new_field_name] = df[v].ewm(alpha=ewm_alpha).mean()
         new_x_names.append(new_field_name)
     x_names = new_x_names
 
@@ -1505,6 +1528,16 @@ except Exception as e:
         df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
         print('X Names Length: {0}'.format(len(x_names)))
 
+    if trend_x_names:
+        for v in trend_x_names:
+            new_field_name = v + '_ewma'
+            if new_field_name not in df.columns.values:
+                df[new_field_name] = df[v].ewm(alpha=ewm_alpha).mean()
+            x_names.append(new_field_name)
+        # IMPUTE VALUES!!!
+        df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+        print('X Names Length: {0}'.format(len(x_names)))
+
     ################################################################################################################
     # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
     ###############################################################################################################
@@ -1579,11 +1612,14 @@ except Exception as e:
             df[sp500_qtr_since_rise] = time_since_last_true(temp_df[new_x_names[-2]])
             x_names.append(sp500_qtr_since_rise)
 
-            print(new_x_names[-4:-2])
-            df = df.join(temp_df[new_x_names[-4:-2]], how='inner')
-            x_names.extend(new_x_names[-4:-2])
+            temp_df, new_x_names = get_trend_variables(df[x], x)
 
-        df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+            # print(new_x_names)
+            df = df.join(temp_df[new_x_names], how='inner')
+            x_names.extend(new_x_names)
+
+
+df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
 
 for n in x_names:
     if df[n].isnull().any():

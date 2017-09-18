@@ -863,13 +863,13 @@ class Model_Builder:
 
 
     def train_predictive_model(self,
-                               model,
-                               retrain_model,
+                               model: Model,
+                               retrain_model: bool,
                                cross_val_iters,
                                cross_val_model,
-                               x_columns,
+                               x_columns: list,
                                x_train,
-                               y_train):
+                               y_train: np.ndarray):
         if model.is_custom:
             if hasattr(model.model_class, 'fit'):
                 clf = model.model_class
@@ -912,9 +912,9 @@ class Model_Builder:
             elif model.model_class == 'elastic_net_stacking':
                 clf = ElasticNet(positive=True)  # Used positive=True to make this ideal for stacking
             elif model.model_class == 'neural_c':
-                clf = MLPClassifier(learning_rate='adaptive', learning_rate_init=0.1)
+                clf = MLPClassifier(learning_rate='adaptive')
             elif model.model_class == 'neural_r':
-                clf = MLPRegressor(learning_rate='adaptive', learning_rate_init=0.1)
+                clf = MLPRegressor(learning_rate='adaptive')
             elif model.model_class == 'svc':
                 clf = SVC()
             elif model.model_class == 'svr':
@@ -1055,6 +1055,14 @@ class Model_Builder:
                         , 'squared_epsilon_insensitive']
                 else:
                     grid_param_dict['loss'] = clf._SUPPORTED_LOSS
+
+            # LOSSES
+            if 'penalty' in clf.get_params().keys():
+                if isinstance(clf, (SGDClassifier, SGDRegressor)):
+                    if len(np.unique(y_train)) == 2:
+                        grid_param_dict['penalty'] = ['elasticnet']
+                    else:
+                        grid_param_dict['penalty'] = ['l2']
 
             # WEIGHTS
             if 'weights' in clf.get_params().keys():
