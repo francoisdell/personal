@@ -1005,6 +1005,10 @@ class Model_Builder:
             if 'bootstrap' in clf.get_params().keys():
                 clf.bootstrap = True
 
+            # HIDDEN LAYER SIZES
+            if 'hidden_layer_sizes' in clf.get_params().keys():
+                clf.hidden_layer_sizes = (int(len(x_columns)/2),)
+
             # ALPHAS
             if 'alpha' in clf.get_params().keys():
                 if isinstance(clf, (GradientBoostingRegressor)):

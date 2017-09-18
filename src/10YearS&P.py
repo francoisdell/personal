@@ -41,10 +41,10 @@ rawdata_from_file = True  # Whether to load the raw data (pre-transformations) f
 finaldata_from_file = False  # Whether to load the final data (post-transformations) from a pickle file
 
 # Do you want to predict returns? Or Recessions?
-do_predict_returns = False
-returns_predict_quarters_forward = [4, 40]
+do_predict_returns = True
+returns_predict_quarters_forward = [2, 4]
 do_predict_recessions = True
-recession_predict_quarters_forward = [2, 4, 6, 8]
+recession_predict_quarters_forward = [1]
 do_predict_next_recession = False
 
 # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
@@ -56,6 +56,7 @@ transform_vars = True
 trim_vars = False
 calc_trend_values = True
 calc_std_values = True
+calc_diff_from_trend_values = True
 
 # VARIANCE REDUCTION. Either PCA Variance or Correlation Limits
 correlation_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
@@ -63,7 +64,7 @@ max_correlation = 0  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a 
 
 # DIMENSION REDUCTION. Either PCA Variance or Correlation Rankings
 dimension_method = 'corr'  # Use either None, 'corr' for correlations, or 'pca' for PCA
-max_variables = 0.5  # Options: 0 for 'auto' [n_obs ^ (1/2)] or an integer for a specific number of variables.
+max_variables = 0.65  # Options: 0 for 'auto' [n_obs ^ (1/2)] or an integer for a specific number of variables.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -76,7 +77,7 @@ prev_rec_field_name = 'recession_usa_time_since_prev'
 next_rec_field_name = 'recession_usa_time_until_next'
 verbose = False
 fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
-ewm_alpha = 0.875  # Halflife for EWM calculations. 4.2655 corresponds to a 0.125 weight.
+ewm_alpha = 0.125  # Halflife for EWM calculations. 4.2655 corresponds to a 0.125 weight.
 default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster, if less ideal.
 stack_include_preds = False
 final_include_data = False
@@ -94,19 +95,17 @@ if do_predict_recessions:
     initial_models=['logit','etree_c','nearest_centroid','gbc','bernoulli_nb','svc','rfor_c'] # pass_agg_c
     # initial_models=['logit','etree_c']
     if max_correlation < 1. or max_variables == 0:
-        initial_models.extend(['gauss_proc_c'])
+        initial_models.extend(['gauss_proc_c', 'neural_c'])
 
     # BEST MODELS: logit, svc, sgd_c, neural_c, gauss_proc_c
     # Overall best model: svc???
-    final_models=['logit','svc','sgd_c']
+    final_models=['logit','svc']
     if (not final_include_data) or max_correlation < 1. or max_variables == 0:
-        final_models.extend(['gauss_proc_c'])
+        final_models.extend(['gauss_proc_c', 'neural_c'])
+    final_models = 'gauss_proc_c'
 
     # initial_models=['logit','etree_c','nearest_centroid','gbc','bernoulli_nb','svc','pass_agg_c','gauss_proc_c']
     recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
-    # recession_models = ModelSet(final_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc','sgd_c','bernoulli_nb','ridge_c','neural_c','gauss_proc_c'],
-    #                               initial_models=['logit','nearest_centroid','etree_c','pass_agg_c','knn_c','gbc','svc'])
-
 
 if do_predict_returns:
     initial_models = ['rfor_r','gbr','pass_agg_r','elastic_net','knn_r','ridge_r','svr']
@@ -404,10 +403,10 @@ def predict_returns(df: pd.DataFrame,
               , save_name='_'.join([forward_y_field_name_pred, report_name, str(quarters_forward)])
               , title='_'.join([y_field_name, report_name]))
 
-        yield (OrderedDict(((forward_y_field_name, df[forward_y_field_name])
-            , (forward_y_field_name_pred, df[forward_y_field_name_pred])
-            , (y_field_name_pred, df[y_field_name_pred])))
-            , report_name)
+        yield (OrderedDict(((forward_y_field_name, df[forward_y_field_name]),
+            (forward_y_field_name_pred, df[forward_y_field_name_pred]),
+            (y_field_name_pred, df[y_field_name_pred]))),
+            report_name)
 
 
 
@@ -497,10 +496,13 @@ def predict_recession(df: pd.DataFrame
               , save_name='_'.join([forward_y_field_name_pred, report_name])
               , title='_'.join([y_field_name, report_name]))
 
-        yield (OrderedDict(((forward_y_field_name, df[forward_y_field_name])
-            , (forward_y_field_name_pred, df[forward_y_field_name_pred])
-            , (y_field_name_pred, df[y_field_name_pred])))
-            , report_name)
+        yield (OrderedDict((
+                            (forward_y_field_name, df[forward_y_field_name].astype(float)),
+                            (forward_y_field_name_pred, df[forward_y_field_name_pred].astype(float)),
+                            (y_field_name_pred, df[y_field_name_pred].astype(float)),
+                            (y_prob_field_name, df[y_prob_field_name].astype(float)),
+                            )),
+               report_name)
 
 
 def predict_recession_time(df: pd.DataFrame,
@@ -576,9 +578,11 @@ def predict_recession_time(df: pd.DataFrame,
           , save_name='_'.join([y_field_name_pred, report_name])
           , title='_'.join([y_field_name, report_name]))
 
-    yield (OrderedDict(((y_field_name, df[y_field_name])
-        , (y_field_name_pred, df[y_field_name_pred])))
-        , report_name)
+    yield (OrderedDict((
+                        (y_field_name, df[y_field_name].astype(float)),
+                        (y_field_name_pred, df[y_field_name_pred].astype(float)),
+                        )),
+           report_name)
 
 
 def decimal_to_date(d: str):
@@ -610,7 +614,10 @@ class data_source:
     def collect_data(self):
         global start_dt, end_dt
         if isfunction(self.provider):
-            self.data = self.provider()
+            if self.code:
+                self.data = self.provider(self.code)
+            else:
+                self.data = self.provider(self.code)
         elif self.provider == 'fred':
             self.data = fred.get_series(self.code
                                         , observation_start=start_dt
@@ -741,38 +748,37 @@ def get_level1_interactions(df: pd.DataFrame, x_names: list, min: float=0.1, max
 def get_diff_std_and_flags(s: pd.Series
                            , field_name: str
                            , alpha: float=ewm_alpha
-                           , stdev_qty: int=2)\
+                           , stdev_qty: float=2.)\
         -> (pd.DataFrame, list):
 
-    d = s.to_frame(name=field_name)
     new_name_ewma = field_name + '_ewma'
     new_name_std = field_name + '_std'
     new_name_prefix = field_name + '_val_to_ewma'
     new_name_diff = new_name_prefix + '_diff'
     new_name_diff_std = new_name_prefix + '_diff_std'
-    new_name_add_std = new_name_prefix + '_add_std'
-    new_name_sub_std = new_name_prefix + '_sub_std'
-    new_name_trend_rise = new_name_prefix + '_trend_rise_flag'
-    new_name_trend_fall = new_name_prefix + '_trend_fall_flag'
+    new_name_add_std = new_name_prefix + '_add_{0}std'.format(stdev_qty)
+    new_name_sub_std = new_name_prefix + '_sub_{0}std'.format(stdev_qty)
+    new_name_trend_rise = new_name_prefix + '_trend_rise_flag_{0}std'.format(stdev_qty)
+    new_name_trend_fall = new_name_prefix + '_trend_fall_flag_{0}std'.format(stdev_qty)
 
-    if new_name_ewma not in d.columns:
-        # d[ewma_field_name] = d[field_name].ewm(alpha=ewm_alpha).mean()
-        d[new_name_ewma] = d[field_name].ewm(alpha=alpha).mean()
-    d[new_name_std] = d[field_name].ewm(alpha=alpha).std(bias=False)
-    d[new_name_diff] = d[field_name] - d[new_name_ewma]
-    d[new_name_diff_std] = d[new_name_diff].ewm(alpha=alpha).std(bias=False)
-    d[new_name_add_std] = d[new_name_ewma] + (stdev_qty * d[new_name_diff_std])
-    d[new_name_sub_std] = d[new_name_ewma] - (stdev_qty * d[new_name_diff_std])
-    d[new_name_sub_std] = d[new_name_sub_std].clip(lower=0)
-    d[new_name_trend_rise] = d[field_name].values > d[new_name_add_std].values
-    d[new_name_trend_fall] = d[field_name].values < d[new_name_sub_std].values
+    s_ewma = s.ewm(alpha=alpha).mean()
+    s_std = s.ewm(alpha=alpha).std(bias=True).shift(1)
+    s_diff = s - s_ewma
+    s_diff_std = s_diff.shift(1).ewm(alpha=alpha).std(bias=True)
+    s_ewma_add_std = s_ewma.shift(1) + (stdev_qty * s_diff_std)
+    s_ewma_sub_std = s_ewma.shift(1) - (stdev_qty * s_diff_std)
+    s_ewma_sub_std = s_ewma_sub_std.clip(lower=0)
+    d = pd.DataFrame(index=s.index)
+    d[new_name_trend_rise] = s.values > s_ewma_add_std.values
+    d[new_name_trend_fall] = s.values < s_ewma_sub_std.values
 
-    return d, [new_name_diff, new_name_diff_std, new_name_add_std, new_name_sub_std, new_name_trend_rise, new_name_trend_fall]
+    return d, [new_name_diff, new_name_diff_std, new_name_add_std, new_name_sub_std, new_name_trend_rise,
+               new_name_trend_fall]
 
 
 def get_trend_variables(s: pd.Series,
                         field_name: str,
-                        alpha: float=0.75)\
+                        alpha: float=0.25)\
         -> (pd.DataFrame, list):
 
     d = s.to_frame(name=field_name)
@@ -784,8 +790,8 @@ def get_trend_variables(s: pd.Series,
     range_len = 17
     index_range = range(1, range_len)
     for exp in index_range:
-        h1 = 1-((1-alpha)*(1/exp))
-        h2 = 1-((1-alpha)*(1/exp+1))
+        h1 = alpha*(1/(exp))
+        h2 = alpha*(1/(exp+1))
         ema1 = d[field_name].ewm(alpha=h1).mean()
         ema2 = d[field_name].ewm(alpha=h2).mean()
         ema_df[str(exp)] = ema1 / ema2
@@ -804,7 +810,7 @@ def get_trend_variables(s: pd.Series,
     return d, [new_name_trend_strength, new_name_trend_strength_weighted]
 
 
-def get_std_from_ewma(s: pd.Series, field_name: str, alpha: float=0.9375) -> (pd.DataFrame, list):
+def get_std_from_ewma(s: pd.Series, field_name: str, alpha: float=ewm_alpha/4) -> (pd.DataFrame, list):
 
     d = s.to_frame(name=field_name)
 
@@ -813,9 +819,87 @@ def get_std_from_ewma(s: pd.Series, field_name: str, alpha: float=0.9375) -> (pd
     new_name_std_from_ewma = field_name + '_std_from_ewma'
 
     d[new_name_ewma] = d[field_name].ewm(alpha=alpha).mean()
-    d[new_name_std] = d[field_name].ewm(alpha=alpha).std(bias=False)
+    d[new_name_std] = d[field_name].ewm(alpha=alpha).std(bias=True)
     d[new_name_std_from_ewma] = (d[field_name] - d[new_name_ewma]) / d[new_name_std]
     return d, [new_name_std_from_ewma]
+
+
+def get_diff_from_trend(s: pd.Series, field_name: str) -> (pd.DataFrame, list):
+
+    N = len(s.values)
+    from sklearn import linear_model
+    n = pd.Series([v+2 for v in range(len(s.values))], index=s.index)
+    logn = np.log(n)
+
+    # fit linear model
+    linmod = linear_model.LinearRegression()
+    x = np.reshape(n, (N, 1))
+    y = s
+    linmod.fit(x, y)
+    linmod_rsquared = linmod.score(x, y)
+    m = linmod.coef_[0]
+    c = linmod.intercept_
+    linear = c + (n * m)
+
+    # fit log-log model
+    loglogmod = linear_model.LinearRegression()
+    x = np.reshape(logn, (N, 1))
+    y = np.log(s)
+    loglogmod.fit(x, y)
+    loglogmod_rsquared = loglogmod.score(x, y)
+    m = loglogmod.coef_[0]
+    c = loglogmod.intercept_
+    polynomial = math.exp(c) * np.power(n, m)
+
+    # fit log model
+    logmod = linear_model.LinearRegression()
+    x = np.reshape(n, (N, 1))
+    y = np.log(s)
+    logmod.fit(x, y)
+    logmod_rsquared = logmod.score(x, y)
+    m = logmod.coef_[0]
+    c = logmod.intercept_
+    exponential = np.exp(n * m) * math.exp(c)
+
+    if False:
+        # plot results
+        plt.subplot(1, 1, 1)
+        plt.plot(n, s, label='series {0}'.format(field_name), lw=2)
+
+        # linear model
+        m = linmod.coef_[0]
+        c = linmod.intercept_
+        plt.plot(n, linear, label='$t={0:.1f} + n*{{{1:.1f}}}$ ($r^2={2:.4f}$)'.format(c, m, linmod_rsquared),
+                 ls='dashed', lw=3)
+
+        # log-log model
+        m = loglogmod.coef_[0]
+        c = loglogmod.intercept_
+        plt.plot(n, polynomial, label='$t={0:.1f}n^{{{1:.1f}}}$ ($r^2={2:.4f}$)'.format(math.exp(c), m, loglogmod_rsquared),
+                 ls='dashed', lw=3)
+
+        # log model
+        m = logmod.coef_[0]
+        c = logmod.intercept_
+        plt.plot(n, exponential, label='$t={0:.1f}e^{{{1:.1f}n}}$ ($r^2={2:.4f}$)'.format(math.exp(c), m, logmod_rsquared),
+                 ls='dashed', lw=3)
+
+        # Show the plot results
+        plt.legend(loc='upper center', prop={'size': 16}, borderaxespad=0., bbox_to_anchor=(0.5, 1.25))
+        plt.show()
+
+    max_rsq = round(max(linmod_rsquared, logmod_rsquared, loglogmod_rsquared),2)
+    if linmod_rsquared + 0.1 >= max_rsq:
+        trend = linear
+    elif loglogmod_rsquared + 0.05 >= max_rsq:
+        trend = polynomial
+    else:
+        trend = exponential
+
+
+    new_name_vs_trend = field_name + '_vs_trend'
+    d = pd.DataFrame(s / trend, columns=[new_name_vs_trend])
+    return d, [new_name_vs_trend]
 
 
 def time_since_last_true(s: pd.Series) -> pd.Series:
@@ -1063,10 +1147,10 @@ def calc_equity_alloc() -> pd.Series:
             )
         )
     )
-    return make_qtrly(equity_alloc, 'last')
+    return make_qtrly(equity_alloc, 'first')
 
 
-def get_nyse_margin_debt() -> pd.Series:
+def get_nyse_margin_debt(field_name: str) -> pd.Series:
     url = 'http://www.nyxdata.com/nysedata/asp/factbook/table_export_csv.asp?mode=tables&key=50'
     with requests.Session() as s:
         download = s.get(url=url)
@@ -1074,13 +1158,20 @@ def get_nyse_margin_debt() -> pd.Series:
     strio = io.StringIO(download.text)
     df = pd.read_table(strio, sep='\\t', skiprows=3)
 
-    print(df)
-
     df['End of month'] = pd.DatetimeIndex(pd.to_datetime(df['End of month']),
-                                          dtype=datetime.date).to_period('M').to_datetime('M')
-    df.set_index(['End of month'], inplace=True, drop=True)
-    print(df)
+                                  dtype=datetime.date).to_period('M').to_timestamp('M')
+    df.set_index(['End of month'],
+                 drop=True,
+                 inplace=True,
+                 verify_integrity=True)
 
+    df = df\
+        .replace( '[\$,)]', '', regex=True)\
+        .replace( '[(]', '-',   regex=True)\
+        .astype(float)
+
+    # print(df)
+    return make_qtrly(df[field_name], 'first')
 
 #########################################################################################
 # START THE STUFF
@@ -1134,6 +1225,8 @@ data_sources['m1_moneystock'] = data_source('M1NS', 'fred')
 # data_sources['wrk_age_pop_pct'] = data_source('SP.POP.1564.TO.ZS', 'worldbank', rerun=True)
 data_sources['wrk_age_pop'] = data_source('LFWA64TTUSM647N', 'fred')
 data_sources['employment_pop_ratio'] = data_source('EMRATIO', 'fred')
+data_sources['nyse_margin_debt'] = data_source('Margin debt', get_nyse_margin_debt)
+data_sources['nyse_margin_credit'] = data_source('Credit balances in margin accounts', get_nyse_margin_debt)
 
 data_sources['recession_usa'] = data_source('USREC', 'fred')
 
@@ -1192,7 +1285,7 @@ except Exception as e:
     df = pd.DataFrame()
     for k, ds in data_sources.items():
         if ds.provider in ('eod_hist', 'fred', 'schiller'):
-            df[k] = make_qtrly(ds.data, 'last')
+            df[k] = make_qtrly(ds.data, 'first')
         else:
             df[k] = ds.data
 
@@ -1210,105 +1303,46 @@ except Exception as e:
     df['tsy_3m10y_curve'] = df['tsy_3mo_yield'] / df['tsy_10yr_yield']
     df['tobin_q'] = [math.sqrt(x * y) for x, y in df.loc[:,['nonfin_equity','nonfin_networth']].values]  # geom mean
     df['corp_profit_margins'] = df['nonfin_pretax_profit'] / df['gdp_nom']
+    df['mzm_usage'] = df['mzm_velocity'] * df['mzm_moneystock']
+    df['m1_usage'] = df['m1_velocity'] * df['m1_moneystock']
+    df['m2_usage'] = df['m2_velocity'] * df['m2_moneystock']
+    df['nyse_margin_debt_ratio'] = df['nyse_margin_debt'] / df['nyse_margin_credit']
 
-    if do_predict_returns:
-        # FULL LIST FOR LINEAR REGRESSION
-        x_names = [
-            'equity_alloc'
-            # , 'tsy_10yr_yield'
-            # , 'tsy_5yr_yield'
-            # , 'tsy_3mo_yield'
-            # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
-            , 'unempl_rate'
-            , 'empl_construction'
-            , 'sp500_peratio'
-            , 'capacity_util_mfg'
-            , 'capacity_util_chem'
-            # , 'gold_fix_3pm'
-            # , 'fed_funds_rate'
-            , 'tsy_3m10y_curve'
-            , 'industrial_prod'
-            # , 'tsy_10yr_minus_fed_funds_rate'
-            # , 'tsy_10yr_minus_cpi'
-            # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
-            # , 'gdp_nom'
-            # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
-            # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
-            # , 'tsy_30yr_yield' # Not much history
-            , 'med_family_income_vs_house_price'
-            , 'pers_savings_rt'
-            , 'corp_profit_margins'
-            , 'cape'
-            , 'tobin_q'
-            , 'mzm_velocity'
-            , 'm2_velocity'
-            , 'm1_velocity'
-            , 'wrk_age_pop'
-        ]
-        """
-        x_names = [
-            'equity_alloc'
-            # , 'tsy_10yr_yield'
-            # , 'tsy_5yr_yield'
-            # , 'tsy_3mo_yield'
-            # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
-            , 'unempl_rate'
-            # , 'empl_construction'
-            , 'sp500_peratio'
-            # , 'capacity_util_mfg'
-            # , 'capacity_util_chem'
-            # , 'gold_fix_3pm'
-            # , 'fed_funds_rate'
-            # , 'tsy_3m10y_curve'
-            , 'industrial_prod'
-            # , 'tsy_10yr_minus_fed_funds_rate'
-            # , 'tsy_10yr_minus_cpi'
-            # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
-            # , 'gdp_nom'
-            # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
-            # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
-            # , 'tsy_30yr_yield' # Not much history
-            , 'med_family_income_vs_house_price'
-            # , 'pers_savings_rt'
-            # , 'corp_profit_margins'
-            , 'cape'
-            , 'tobin_q'
-            ]
-        """
-
-    else:
-        x_names = [
-            'equity_alloc'
-            , 'tsy_10yr_yield' # Treasury prices have been generally increasing over the time period. Don't use.
-            , 'tsy_5yr_yield' # Treasury prices have been generally increasing over the time period. Don't use.
-            , 'tsy_3mo_yield' # Treasury prices have been generally increasing over the time period. Don't use.
-            # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY
-            , 'unempl_rate'
-            # , 'empl_construction'  # Construction employees heave been generally increasing over the time period. Don't use.
-            , 'sp500_peratio'
-            , 'capacity_util_mfg'
-            , 'capacity_util_chem'
-            # , 'gold_fix_3pm' # Gold price has been generally increasing over the time period. Don't use.
-            # , 'fed_funds_rate' # Fed funds rate has been generally declining over the time period. Don't use.
-            , 'tsy_3m10y_curve'
-            , 'industrial_prod'
-            # , 'tsy_10yr_minus_fed_funds_rate'
-            # , 'tsy_10yr_minus_cpi'
-            # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
-            # , 'gdp_nom' # GDP is generally always rising. Don't use.
-            # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
-            # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
-            # , 'tsy_30yr_yield' # Not much history
-            , 'med_family_income_vs_house_price'
-            # , 'pers_savings_rt'
-            , 'corp_profit_margins'
-            , 'cape'
-            , 'tobin_q'
-            , 'mzm_velocity'
-            , 'm2_velocity'
-            , 'm1_velocity'
-            , 'employment_pop_ratio'
-        ]
+    x_names = [
+        'equity_alloc',
+        'tsy_10yr_yield', # Treasury prices have been generally increasing over the time period. Don't use.,
+        'tsy_5yr_yield', # Treasury prices have been generally increasing over the time period. Don't use.,
+        'tsy_3mo_yield', # Treasury prices have been generally increasing over the time period. Don't use.
+        # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY,
+        'unempl_rate',
+        # , 'empl_construction'  # Construction employees heave been generally increasing over the time period. Don't use.,
+        # 'sp500_peratio',
+        'capacity_util_mfg',
+        'capacity_util_chem',
+        # , 'gold_fix_3pm' # Gold price has been generally increasing over the time period. Don't use.
+        # , 'fed_funds_rate' # Fed funds rate has been generally declining over the time period. Don't use.,
+        'tsy_3m10y_curve',
+        'industrial_prod',
+        # , 'tsy_10yr_minus_fed_funds_rate'
+        # , 'tsy_10yr_minus_cpi'
+        # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
+        # , 'gdp_nom' # GDP is generally always rising. Don't use.
+        # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
+        # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
+        # , 'tsy_30yr_yield' # Not much history,
+        'med_family_income_vs_house_price',
+        # , 'pers_savings_rt',
+        'corp_profit_margins',
+        'cape',
+        'tobin_q',
+        # , 'mzm_velocity'
+        # , 'm2_velocity'
+        # , 'm1_velocity',
+        'mzm_usage',
+        'm2_usage',
+        'm1_usage',
+        'employment_pop_ratio',
+    ]
 
     empty_cols = [c for c in df.columns.values if all(df[c].isnull())]
     if len(empty_cols) > 0:
@@ -1323,6 +1357,8 @@ except Exception as e:
     non_null_mask = [x >= 3 for x in df.loc[:, x_names].count(axis=1).values]  # Periods where >=3 data points exist
     # non_null_mask = ~pd.isnull(df.loc[:, x_names]).any(axis=1).values  # Periods where ANY data points exist
     df = df.loc[non_null_mask, :]
+
+    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
 
     ##########################################################################################################
     # Derive trend metric variables
@@ -1351,48 +1387,65 @@ except Exception as e:
             df = df.join(temp_df[new_x_names], how='inner')
             trend_x_names.extend(new_x_names)
 
+    if calc_diff_from_trend_values:
+        print('Deriving Difference-From-Mean values.')
+        # Add x-variables for time since the last rise, and time since the last fall, in the SP500
+        # for x in ['sp500']:
+        for x in x_names.copy():
+            temp_df, new_x_names = get_diff_from_trend(df[x], x)
+
+            # print(new_x_names)
+            df = df.join(temp_df[new_x_names], how='inner')
+            trend_x_names.extend(new_x_names)
+
     ##########################################################################################################
     # Derive difference variables to demonstrate changes from period to period
     ##########################################################################################################
     print('Adding x-year diff terms.')
     diff_x_names = [
-        'gdp_nom'
-        , 'equity_alloc'
-        , 'cpi_urb_nonvol'
-        # , 'empl_construction'
-        , 'industrial_prod'
-        , 'housing_starts'
-        , 'housing_supply'
-        , 'med_house_price'
-        , 'med_family_income'
-        , 'unempl_rate'
-        , 'industrial_prod'
-        , 'tsy_10yr_yield'
-        , 'tsy_5yr_yield'
-        , 'tsy_3mo_yield'
-        # , 'tsy_10yr_minus_fed_funds_rate'
-        # , 'tsy_10yr_minus_cpi'
-        , 'real_med_family_income'
-        , 'combanks_business_loans'
-        , 'combanks_assets_tot'
-        , 'mortage_debt_individuals'
-        , 'real_estate_loans'
-        , 'foreign_dir_invest'
-        # , 'pers_savings_rt'
-        # , 'gross_savings'
-        , 'tax_receipts_corp'
-        , 'fed_funds_rate'
-        , 'gold_fix_3pm'
-        , 'corp_profit_margins'
-        , 'cape'
-        , 'tobin_q'
-        , 'mzm_velocity'
-        , 'm2_velocity'
-        , 'm1_velocity'
-        , 'mzm_moneystock'
-        , 'm1_moneystock'
-        , 'm2_moneystock'
-        , 'employment_pop_ratio'
+        # 'gdp_nom',
+        'equity_alloc',
+        'cpi_urb_nonvol',
+        # 'empl_construction',
+        'industrial_prod',
+        'housing_starts',
+        'housing_supply',
+        'med_house_price',
+        'med_family_income',
+        'unempl_rate',
+        'industrial_prod',
+        'tsy_10yr_yield',
+        'tsy_5yr_yield',
+        'tsy_3mo_yield',
+        # 'tsy_10yr_minus_fed_funds_rate',
+        # 'tsy_10yr_minus_cpi',
+        'real_med_family_income',
+        'combanks_business_loans',
+        'combanks_assets_tot',
+        'mortage_debt_individuals',
+        'real_estate_loans',
+        'foreign_dir_invest',
+        # 'pers_savings_rt',
+        # 'gross_savings',
+        'tax_receipts_corp',
+        'fed_funds_rate',
+        # 'gold_fix_3pm',
+        'corp_profit_margins',
+        'cape',
+        'tobin_q',
+        # 'mzm_velocity',
+        # 'm2_velocity',
+        # 'm1_velocity',
+        # 'mzm_moneystock',
+        # 'm1_moneystock',
+        # 'm2_moneystock',
+        'mzm_usage',
+        'm2_usage',
+        'm1_usage',
+        'employment_pop_ratio',
+        'nyse_margin_debt',
+        # 'nyse_margin_credit',  # has an odd discontunuity in the credit balances in Jan 85. Adjust before using.
+        # 'nyse_margin_debt_ratio',  # has an odd discontunuity in the credit balances in Jan 85. Adjust before using.
     ]
 
     ##########################################################################################################
@@ -1418,17 +1471,6 @@ except Exception as e:
         if df[n].isnull().any():
             print('Field [{0}] was still empty after imputation! Removing it!'.format(n))
             x_names.remove(n)
-
-    ################################################################################################################
-    # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
-    ################################################################################################################
-    if (dimension_method is not None) and max_variables >= 0:
-        if dimension_method == 'corr':
-            x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
-            print('X Names Length: {0}'.format(len(x_names)))
-        elif dimension_method == 'pca':
-            df, x_names = reduce_vars_pca(df=df, field_names=x_names, max_num=max_variables)
-        print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
     # Convert all x fields to EWMA versions, to smooth craziness
@@ -1520,7 +1562,7 @@ except Exception as e:
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
-    # Add the x value correlations (generated earlier) to the dataset
+    # Add the x value correlations and trend variables (generated earlier) to the dataset
     ##########################################################################################################
     if corr_x_names:
         x_names.extend(corr_x_names)
@@ -1540,7 +1582,7 @@ except Exception as e:
 
     ################################################################################################################
     # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
-    ###############################################################################################################
+    ################################################################################################################
     if (dimension_method is not None) and max_variables >= 0:
         if dimension_method == 'corr':
             x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
@@ -1553,15 +1595,19 @@ except Exception as e:
     # Add x-variable for time since the last recession. Create y-variable for time until the next recession.
     ##########################################################################################################
     last_rec = -1
-    for idx, val in enumerate(df.index.values):
-        rec_val = df.get_value(val, 'recession_usa')
+    for idx, period in enumerate(df.index.values):
+        rec_val = df.get_value(period, 'recession_usa')
         if rec_val == 1:
             for i, v in enumerate(df.iloc[last_rec:idx, :].index.values):
                 df.set_value(v, next_rec_field_name, idx - last_rec - i)
             last_rec = idx
-            df.set_value(val, prev_rec_field_name, 0)
+            if idx > 0:
+                next_val = min(df[prev_rec_field_name].iloc[idx-1] - 1, 0)
+            else:
+                next_val = -3
+            df.set_value(period, prev_rec_field_name, next_val)
         elif rec_val == 0:
-            df.set_value(val, prev_rec_field_name, idx - last_rec)
+            df.set_value(period, prev_rec_field_name, idx - last_rec)
     x_names.append(prev_rec_field_name)
 
     # print(*df.index.values, sep='\n')
@@ -1571,6 +1617,34 @@ except Exception as e:
     else:
         # x_names.append(next_rec_field_name)
         df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+
+    ##########################################################################################################
+    # Derive special predictor variables
+    ##########################################################################################################
+    if calc_trend_values:
+        print('Deriving special predictor variables for y variable.')
+
+        # Add x-variables for time since the last rise, and time since the last fall, in the SP500
+        for x in [sp_field_name]:
+            for stdev in [1.5, 2.25, 3]:
+                temp_df, new_x_names = get_diff_std_and_flags(df[x], x, stdev_qty=stdev)
+
+                sp500_qtr_since_fall = '{0}_time_since_{1}std_fall'.format(x, stdev)
+                df[sp500_qtr_since_fall] = time_since_last_true(temp_df[new_x_names[-1]])
+                x_names.append(sp500_qtr_since_fall)
+
+                sp500_qtr_since_rise = '{0}_time_since_{1}std_rise'.format(x, stdev)
+                df[sp500_qtr_since_rise] = time_since_last_true(temp_df[new_x_names[-2]])
+                x_names.append(sp500_qtr_since_rise)
+
+            temp_df, new_x_names = get_trend_variables(df[x], x)
+
+            # print(new_x_names)
+            df = df.join(temp_df[new_x_names], how='inner')
+            x_names.extend(new_x_names)
+
+
+    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
 
     ################################################################################################################
     # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
@@ -1589,37 +1663,10 @@ except Exception as e:
 
     if (correlation_method is not None) and max_correlation < 1. and dimension_method != 'pca':
         if dimension_method == 'corr':
-            x_names = reduce_variance_corr(df=df, x_fields=x_names, max_corr_val=max_correlation)
+            x_names = reduce_variance_corr(df=df, fields=x_names, max_corr_val=max_correlation)
         elif correlation_method == 'pca':
             df, x_names = reduce_variance_pca(df=df, field_names=x_names, explained_variance=max_correlation)
         print('X Names Length: {0}'.format(len(x_names)))
-
-    ##########################################################################################################
-    # Derive special predictor variables
-    ##########################################################################################################
-    if calc_trend_values:
-        print('Deriving special predictor variables for y variable.')
-
-        # Add x-variables for time since the last rise, and time since the last fall, in the SP500
-        for x in [sp_field_name]:
-            temp_df, new_x_names = get_diff_std_and_flags(df[x], x)
-
-            sp500_qtr_since_fall = '{0}_time_since_prev_fall'.format(x_names)
-            df[sp500_qtr_since_fall] = time_since_last_true(temp_df[new_x_names[-1]])
-            x_names.append(sp500_qtr_since_fall)
-
-            sp500_qtr_since_rise = '{0}_time_since_prev_rise'.format(x_names)
-            df[sp500_qtr_since_rise] = time_since_last_true(temp_df[new_x_names[-2]])
-            x_names.append(sp500_qtr_since_rise)
-
-            temp_df, new_x_names = get_trend_variables(df[x], x)
-
-            # print(new_x_names)
-            df = df.join(temp_df[new_x_names], how='inner')
-            x_names.extend(new_x_names)
-
-
-df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
 
 for n in x_names:
     if df[n].isnull().any():
@@ -1658,17 +1705,7 @@ if do_predict_next_recession:
         # new_field_name = 'next_recession_{0}'.format(report_name)
         x_names.append([v for v in d.keys()][-1])
 
-if do_predict_returns:
-    for yf in returns_predict_quarters_forward:
-        for d, report_name in predict_returns(df=df,
-                                              x_names=x_names,
-                                              y_field_name=sp_field_name,
-                                              quarters_forward=yf,
-                                              model_set=returns_models):
-            for k, v in d.items():
-                df[k] = v
-
-            new_field_name = 'sp500_{0}'.format(report_name)
+    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
 
 # RECESSION PREDICTIONS
 if do_predict_recessions:
@@ -1682,8 +1719,25 @@ if do_predict_recessions:
                 df[k] = v
 
             new_field_name = 'recession_{0}'.format(report_name)
+            for v in [v for v in list(d)][-2:]:
+                x_names.append(v)
 
+    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
 
+if do_predict_returns:
+    for yf in returns_predict_quarters_forward:
+        for d, report_name in predict_returns(df=df,
+                                              x_names=x_names,
+                                              y_field_name=sp_field_name,
+                                              quarters_forward=yf,
+                                              model_set=returns_models):
+            for k, v in d.items():
+                df[k] = v
+            x_names.append([v for v in d.keys()][-1])
+
+            new_field_name = 'sp500_{0}'.format(report_name)
+
+    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
 
 
 
