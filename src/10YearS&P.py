@@ -314,7 +314,9 @@ def predict_returns(df: pd.DataFrame,
                       stack_include_preds=stack_include_preds,
                       final_include_data=final_include_data,
                       correlation_max=0.95,
-                      use_test_set=True)
+                      use_test_set=True,
+                      use_sparse=False
+                      )
 
     for df, final_model_name in m.predict():
 
@@ -460,7 +462,8 @@ def predict_recession(df: pd.DataFrame
                       final_include_data=final_include_data,
                       use_test_set=True,
                       correlation_method='corr',
-                      correlation_max=0.95
+                      correlation_max=0.95,
+                      use_sparse=False
                       # cross_val_iters=(20,20),
                       )
 

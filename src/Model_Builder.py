@@ -148,7 +148,8 @@ class Model_Builder:
                  auto_reg_periods: int=0,
                  correlation_method: str='corr',
                  correlation_max: float=0.95,
-                 correlation_significance_preference=True
+                 correlation_significance_preference=True,
+                 use_sparse: bool=True,
                  ):
         
         self.df = df
@@ -169,7 +170,7 @@ class Model_Builder:
         self.final_include_data = final_include_data
         self.cross_val_iters = cross_val_iters
         self.cross_val_model = cross_val_model
-        self.use_sparse = True
+        self.use_sparse = use_sparse
         self.s = Settings(report_name=report_name)
         self.use_test_set = use_test_set
         self.auto_reg_periods = auto_reg_periods
