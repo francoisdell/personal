@@ -913,9 +913,9 @@ class Model_Builder:
             elif model.model_class == 'elastic_net_stacking':
                 clf = ElasticNet(positive=True)  # Used positive=True to make this ideal for stacking
             elif model.model_class == 'neural_c':
-                clf = MLPClassifier(learning_rate='adaptive')
+                clf = MLPClassifier(learning_rate='adaptive', early_stopping=True)
             elif model.model_class == 'neural_r':
-                clf = MLPRegressor(learning_rate='adaptive')
+                clf = MLPRegressor(learning_rate='adaptive', early_stopping=True)
             elif model.model_class == 'svc':
                 clf = SVC()
             elif model.model_class == 'svr':
@@ -989,14 +989,14 @@ class Model_Builder:
             # SOLVER
             if 'solver' in clf.get_params().keys():
                 if isinstance(clf, (MLPRegressor, MLPClassifier)):
-                    grid_param_dict['solver'] = ['adam']  # 'sgd' tends to crash the system when used parallel. lbfgs
+                    grid_param_dict['solver'] = ['adam','libfgs']  # 'sgd' tends to crash the system when used parallel. lbfgs
                     # elif isinstance(clf, (LogisticRegression)):
                     #     grid_param_dict['solver'] = ['liblinear', 'newton-cg', 'lbfgs', 'sag', 'saga']
 
             # ACTIVATION
             if 'activation' in clf.get_params().keys():
-                # recommend against using 'logistic' for the activation. Just use a logistic regression instead.
-                grid_param_dict['activation'] = ['identity', 'relu']  # tanh tends to crash the system w/ parallel
+                # Could also use 'identity' and 'tanh' (tanh tends to crash the system w/ parallel though)
+                grid_param_dict['activation'] = ['logistic', 'relu']
 
             # CLASS_WEIGHT
             if 'class_weight' in clf.get_params().keys():
