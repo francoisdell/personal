@@ -990,8 +990,8 @@ class Model_Builder:
             if 'solver' in clf.get_params().keys():
                 if isinstance(clf, (MLPRegressor, MLPClassifier)):
                     grid_param_dict['solver'] = ['adam','libfgs']  # 'sgd' tends to crash the system when used parallel. lbfgs
-                    # elif isinstance(clf, (LogisticRegression)):
-                    #     grid_param_dict['solver'] = ['liblinear', 'newton-cg', 'lbfgs', 'sag', 'saga']
+                # elif isinstance(clf, (LogisticRegression)):
+                #     grid_param_dict['solver'] = ['liblinear', 'newton-cg', 'lbfgs', 'sag', 'saga']
 
             # ACTIVATION
             if 'activation' in clf.get_params().keys():
