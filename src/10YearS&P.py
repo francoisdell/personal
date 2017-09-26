@@ -64,7 +64,7 @@ max_correlation = 0  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a 
 
 # DIMENSION REDUCTION. Either PCA Variance or Correlation Rankings
 dimension_method = 'corr'  # Use either None, 'corr' for correlations, or 'pca' for PCA
-max_variables = 0.65  # Options: 0 for 'auto' [n_obs ^ (1/2)] or an integer for a specific number of variables.
+max_variables = 0.65  # Options: 0 for 'auto' [n_obs ^ 0.65] or an integer for a specific number of variables.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -636,30 +636,29 @@ def predict_recession_time(df: pd.DataFrame,
             print(max(df.index))
             from dateutil.relativedelta import relativedelta
 
-            y_field_name_pred = '{0}_pred'.format(y_field_name)
-            chart_y_field_names = [y_field_name, y_field_name_pred]
 
             y_pred_names = m.new_fields
+            y_field_name_pred = y_pred_names[0]
+            chart_y_field_names = [y_field_name, y_field_name_pred]
+
             y_prob_field_name = '{0}_prob_1.0'.format(forward_y_field_name)
             if y_prob_field_name in y_pred_names:
                 chart_y_field_names += [y_prob_field_name]
 
-            report_name = 'next_recession_qtrs_{1}_{2}'.format(model_set, final_model_name)
-            # if quarters_forward in [10]:
+            report_name = 'next_recession_qtrs_{0}_{1}'.format(model_set, final_model_name)
 
-        # if quarters_forward in [10]:
-        chart(df
-              , ys=[['sp500'], [y_field_name, y_field_name_pred, 'tsy_10yr_yield']]
-              , invert=[False, False]
-              , log_scale=[True, False]
-              , save_name='_'.join([y_field_name_pred, report_name])
-              , title='_'.join([y_field_name, report_name]))
+            chart(df
+                  , ys=[['sp500'], [y_field_name, y_field_name_pred, 'tsy_10yr_yield']]
+                  , invert=[False, False]
+                  , log_scale=[True, False]
+                  , save_name='_'.join([y_field_name_pred, report_name])
+                  , title='_'.join([y_field_name, report_name]))
 
-        yield (OrderedDict((
-                            (y_field_name, df[y_field_name].astype(float)),
-                            (y_field_name_pred, df[y_field_name_pred].astype(float)),
-                            )),
-               report_name)
+            yield (OrderedDict((
+                                (y_field_name, df[y_field_name].astype(float)),
+                                (y_field_name_pred, df[y_field_name_pred].astype(float)),
+                                )),
+                   report_name)
 
 
 def decimal_to_date(d: str):
