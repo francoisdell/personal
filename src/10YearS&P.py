@@ -41,11 +41,11 @@ rawdata_from_file = True  # Whether to load the raw data (pre-transformations) f
 finaldata_from_file = False  # Whether to load the final data (post-transformations) from a pickle file
 
 # Do you want to predict returns? Or Recessions?
-do_predict_returns = True
+do_predict_returns = False
 returns_predict_quarters_forward = [2, 4]
-do_predict_recessions = True
+do_predict_recessions = False
 recession_predict_quarters_forward = [1]
-do_predict_next_recession = False
+do_predict_next_recession_method = 'STACKING'  # None/False, 'SARIMAX', or 'STACKING'
 
 # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
 selection_limit = 5.0e-2
@@ -82,10 +82,10 @@ default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is gene
 stack_include_preds = False
 final_include_data = False
 
-if do_predict_next_recession:
-    initial_models = ['rfor_r','gbr','elastic_net','knn_r','svr']
+if do_predict_next_recession_method:
+    initial_models = ['linreg','rfor_r','gauss_proc_r','svr','gbr','knn_r']
     if max_correlation < 1. or max_variables == 0:
-        initial_models.extend(['neural_r','gauss_proc_r'])
+        initial_models.extend(['linreg','gauss_proc_r','elastic_net','svr'])
 
     final_models = ['elastic_net_stacking']
 
@@ -528,64 +528,138 @@ def predict_recession_time(df: pd.DataFrame,
     y_field = OrderedDict([(y_field_name, 'num')])
     x_fields = OrderedDict([(v, 'num') for v in x_names])
 
-    from statsmodels.tsa.statespace.sarimax import SARIMAX
-    # Generate all different combinations of p, q and q triplets
-    # Generate all different combinations of seasonal p, q and q triplets
+    if do_predict_next_recession_method == 'SARIMAX':
+        from statsmodels.tsa.statespace.sarimax import SARIMAX
+        # Generate all different combinations of p, q and q triplets
+        # Generate all different combinations of seasonal p, q and q triplets
 
-    p = d = q = range(1, 2) # Change to 0, 2
-    pdq = list(itertools.product(p, d, q))
-    seasonal_pdq = [(x[0], x[1], x[2], 4) for x in list(itertools.product(p, d, q))]
+        p = d = q = range(1, 2) # Change to 0, 2
+        pdq = list(itertools.product(p, d, q))
+        seasonal_pdq = [(x[0], x[1], x[2], 4) for x in list(itertools.product(p, d, q))]
 
-    best_model = None
-    for param in pdq:
-        for param_seasonal in seasonal_pdq:
-            try:
-                mod = SARIMAX(endog=df.loc[train_mask, y_field_name],
-                              exog=df.loc[train_mask, x_names],
-                              order=param,
-                              seasonal_order=param_seasonal,
-                              enforce_stationarity=False,
-                              enforce_invertibility=False)
+        best_model = None
+        for param in pdq:
+            for param_seasonal in seasonal_pdq:
+                try:
+                    mod = SARIMAX(endog=df.loc[train_mask, y_field_name],
+                                  exog=df.loc[train_mask, x_names],
+                                  order=param,
+                                  seasonal_order=param_seasonal,
+                                  enforce_stationarity=False,
+                                  enforce_invertibility=False)
 
-                results = mod.fit()
+                    results = mod.fit()
 
-                if best_model is None or results.aic < best_model.aic:
-                    best_model = results
+                    if best_model is None or results.aic < best_model.aic:
+                        best_model = results
 
-                print('SARIMAX{}x{}12 - AIC:{}'.format(param, param_seasonal, results.aic))
-            except Exception as e:
-                continue
+                    print('SARIMAX{}x{}12 - AIC:{}'.format(param, param_seasonal, results.aic))
+                except Exception as e:
+                    continue
 
-    start = df.loc[train_mask].index[-1]
-    end = df.loc[~train_mask].index[-1]
-    start_pred = pd.DatetimeIndex(df.loc[train_mask].index.shift(1,'Q'),
-                                  dtype=datetime.date)[-1]
-    sarimax_preds = best_model.get_prediction(start=start,
-                                           end=end,
-                                           exog=df.loc[start_pred:end, x_names],
-                                           dynamic=True)
-    print(sarimax_preds)
+        start = df.loc[train_mask].index[-1]
+        end = df.loc[~train_mask].index[-1]
+        start_pred = pd.DatetimeIndex(df.loc[train_mask].index.shift(1,'Q'),
+                                      dtype=datetime.date)[-1]
+        sarimax_preds = best_model.get_prediction(start=start,
+                                               end=end,
+                                               exog=df.loc[start_pred:end, x_names],
+                                               dynamic=True)
+        print(sarimax_preds)
 
-    y_field_name_pred = 'pred_' + y_field_name
+        y_field_name_pred = 'pred_' + y_field_name
 
-    df.loc[:, y_field_name_pred] = df.loc[:, y_field_name]
+        df.loc[:, y_field_name_pred] = df.loc[:, y_field_name]
 
-    df.loc[sarimax_preds.predicted_mean.index.values, y_field_name_pred] = sarimax_preds.predicted_mean.values
-    report_name = 'time_to_next_recession_sarimax'
+        df.loc[sarimax_preds.predicted_mean.index.values, y_field_name_pred] = sarimax_preds.predicted_mean.values
+        report_name = 'time_to_next_recession_sarimax'
 
-    # if quarters_forward in [10]:
-    chart(df
-          , ys=[['sp500'], [y_field_name, y_field_name_pred, 'tsy_10yr_yield']]
-          , invert=[False, False]
-          , log_scale=[True, False]
-          , save_name='_'.join([y_field_name_pred, report_name])
-          , title='_'.join([y_field_name, report_name]))
+        # if quarters_forward in [10]:
+        chart(df
+              , ys=[['sp500'], [y_field_name, y_field_name_pred, 'tsy_10yr_yield']]
+              , invert=[False, False]
+              , log_scale=[True, False]
+              , save_name='_'.join([y_field_name_pred, report_name])
+              , title='_'.join([y_field_name, report_name]))
 
-    yield (OrderedDict((
-                        (y_field_name, df[y_field_name].astype(float)),
-                        (y_field_name_pred, df[y_field_name_pred].astype(float)),
-                        )),
-           report_name)
+        yield (OrderedDict((
+            (y_field_name, df[y_field_name].astype(float)),
+            (y_field_name_pred, df[y_field_name_pred].astype(float)),
+        )),
+               report_name)
+
+    elif do_predict_next_recession_method == 'STACKING':
+
+        forward_y_field_name = y_field_name
+        df[forward_y_field_name] = df[y_field_name]
+
+        for v in x_names:
+            if not np.isfinite(df[v]).all() or not np.isfinite(df[v].sum()):
+                print('Found Series with non-finite values:{0}'.format(v))
+                print(*df[v].values, sep='\n')
+                raise Exception("Can't proceed until you fix the Series.")
+
+        #################################
+        # USING THE MODEL BUILDER CLASS #
+        #################################
+        y_field = OrderedDict([(forward_y_field_name, 'num')])
+        x_fields = OrderedDict([(v, 'num') for v in x_names])
+
+        report_name = 'next_recession_qtrs_{0}'.format(model_set)
+        m = Model_Builder(df,
+                          x_fields=x_fields,
+                          y_field=y_field,
+                          model_type=model_set,
+                          report_name=report_name,
+                          show_model_tests=True,
+                          retrain_model=False,
+                          selection_limit=selection_limit,
+                          predict_all=True,
+                          verbose=verbose,
+                          train_pct=train_pct,
+                          random_train_test=False,
+                          pca_explained_var=1.0,
+                          stack_include_preds=stack_include_preds,
+                          final_include_data=final_include_data,
+                          use_test_set=True,
+                          correlation_method='corr',
+                          correlation_max=0.95,
+                          use_sparse=False
+                          # cross_val_iters=(20,20),
+                          )
+
+        for df, final_model_name in m.predict():
+
+            forward_y_field_name_pred = 'pred_' + forward_y_field_name
+            #################################
+
+            print(max(df.index))
+            from dateutil.relativedelta import relativedelta
+
+            y_field_name_pred = '{0}_pred'.format(y_field_name)
+            chart_y_field_names = [y_field_name, y_field_name_pred]
+
+            y_pred_names = m.new_fields
+            y_prob_field_name = '{0}_prob_1.0'.format(forward_y_field_name)
+            if y_prob_field_name in y_pred_names:
+                chart_y_field_names += [y_prob_field_name]
+
+            report_name = 'next_recession_qtrs_{1}_{2}'.format(model_set, final_model_name)
+            # if quarters_forward in [10]:
+
+        # if quarters_forward in [10]:
+        chart(df
+              , ys=[['sp500'], [y_field_name, y_field_name_pred, 'tsy_10yr_yield']]
+              , invert=[False, False]
+              , log_scale=[True, False]
+              , save_name='_'.join([y_field_name_pred, report_name])
+              , title='_'.join([y_field_name, report_name]))
+
+        yield (OrderedDict((
+                            (y_field_name, df[y_field_name].astype(float)),
+                            (y_field_name_pred, df[y_field_name_pred].astype(float)),
+                            )),
+               report_name)
 
 
 def decimal_to_date(d: str):
@@ -1607,7 +1681,7 @@ except Exception as e:
             if idx > 0:
                 next_val = min(df[prev_rec_field_name].iloc[idx-1] - 1, 0)
             else:
-                next_val = -3
+                next_val = -2
             df.set_value(period, prev_rec_field_name, next_val)
         elif rec_val == 0:
             df.set_value(period, prev_rec_field_name, idx - last_rec)
@@ -1615,7 +1689,7 @@ except Exception as e:
 
     # print(*df.index.values, sep='\n')
 
-    if do_predict_next_recession:
+    if do_predict_next_recession_method:
         df[x_names+[next_rec_field_name]] = impute_if_any_nulls(df[x_names+[next_rec_field_name]], imputer=default_imputer)
     else:
         # x_names.append(next_rec_field_name)
@@ -1697,7 +1771,7 @@ with open(final_data_file, 'wb') as f:
     pickle.dump((df, x_names), f)
 
 # Predict the number of quarters until the next recession
-if do_predict_next_recession:
+if do_predict_next_recession_method:
     for d, report_name in predict_recession_time(df=df,
                                                  x_names=x_names,
                                                  y_field_name=next_rec_field_name,
