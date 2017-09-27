@@ -43,14 +43,17 @@ rawdata_from_file = True  # Whether to load the raw data (pre-transformations) f
 finaldata_from_file = False  # Whether to load the final data (post-transformations) from a pickle file
 
 # Do you want to predict returns? Or Recessions?
-do_predict_returns = False
-returns_predict_quarters_forward = [2, 4]
+do_predict_returns = True
 do_predict_recessions = False
+do_predict_next_recession_method = False  # None/False, 'SARIMAX', or 'STACKING'
+
+returns_predict_quarters_forward = [36]
 recession_predict_quarters_forward = [1]
-do_predict_next_recession_method = 'STACKING'  # None/False, 'SARIMAX', or 'STACKING'
 
 # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
-selection_limit = 5.0e-2
+mb_train_pct = 0.8  # Defines the train/test split
+mb_selection_limit = 5.0e-3
+mb_correlation_max = 1 - ((1-0.8) * (1-mb_train_pct))
 
 interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
 correlation_type = None  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
@@ -59,7 +62,7 @@ trim_vars = False
 calc_trend_values = True
 calc_std_values = True
 calc_diff_from_trend_values = True
-
+diff_quarters = [2, 6, 18]
 # VARIANCE REDUCTION. Either PCA Variance or Correlation Limits
 correlation_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
 max_correlation = 0  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
@@ -71,7 +74,6 @@ max_variables = 0.65  # Options: 0 for 'auto' [n_obs ^ 0.65] or an integer for a
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
 end_dt = datetime.today().strftime('%Y-%m-%d')
-train_pct = 0.8  # Defines the train/test split
 real = False
 sp_field_name = 'sp500'
 recession_field_name = 'recession_usa'
@@ -310,14 +312,14 @@ def predict_returns(df: pd.DataFrame,
                       report_name=report_name,
                       show_model_tests=True,
                       retrain_model=True,
-                      selection_limit=selection_limit,
+                      selection_limit=mb_selection_limit,
                       predict_all=True,
                       verbose=verbose,
-                      train_pct=train_pct,
+                      train_pct=mb_train_pct,
                       random_train_test=False,
                       stack_include_preds=stack_include_preds,
                       final_include_data=final_include_data,
-                      correlation_max=0.95,
+                      correlation_max=mb_correlation_max,
                       use_test_set=True,
                       use_sparse=False
                       )
@@ -455,17 +457,17 @@ def predict_recession(df: pd.DataFrame
                       report_name=report_name,
                       show_model_tests=True,
                       retrain_model=False,
-                      selection_limit=selection_limit,
+                      selection_limit=mb_selection_limit,
                       predict_all=True,
                       verbose=verbose,
-                      train_pct=train_pct,
+                      train_pct=mb_train_pct,
                       random_train_test=False,
                       pca_explained_var=1.0,
                       stack_include_preds=stack_include_preds,
                       final_include_data=final_include_data,
                       use_test_set=True,
                       correlation_method='corr',
-                      correlation_max=0.95,
+                      correlation_max=mb_correlation_max,
                       use_sparse=False
                       # cross_val_iters=(20,20),
                       )
@@ -615,17 +617,17 @@ def predict_recession_time(df: pd.DataFrame,
                           report_name=report_name,
                           show_model_tests=True,
                           retrain_model=False,
-                          selection_limit=selection_limit,
+                          selection_limit=mb_selection_limit,
                           predict_all=True,
                           verbose=verbose,
-                          train_pct=train_pct,
+                          train_pct=mb_train_pct,
                           random_train_test=False,
                           pca_explained_var=1.0,
                           stack_include_preds=stack_include_preds,
                           final_include_data=final_include_data,
                           use_test_set=True,
                           correlation_method='corr',
-                          correlation_max=0.95,
+                          correlation_max=mb_correlation_max,
                           use_sparse=False
                           # cross_val_iters=(20,20),
                           )
@@ -1302,7 +1304,7 @@ data_sources['wrk_age_pop'] = data_source('LFWA64TTUSM647N', 'fred')
 data_sources['employment_pop_ratio'] = data_source('EMRATIO', 'fred')
 data_sources['nyse_margin_debt'] = data_source('Margin debt', get_nyse_margin_debt)
 data_sources['nyse_margin_credit'] = data_source('Credit balances in margin accounts', get_nyse_margin_debt)
-
+data_sources['us_dollar_index'] = data_source('DTWEXM', 'fred')
 data_sources['recession_usa'] = data_source('USREC', 'fred')
 
 ds_names = [k for k in data_sources.keys()]
@@ -1519,6 +1521,7 @@ except Exception as e:
         'm1_usage',
         'employment_pop_ratio',
         'nyse_margin_debt',
+        'us_dollar_index',
         # 'nyse_margin_credit',  # has an odd discontunuity in the credit balances in Jan 85. Adjust before using.
         # 'nyse_margin_debt_ratio',  # has an odd discontunuity in the credit balances in Jan 85. Adjust before using.
     ]
@@ -1527,7 +1530,7 @@ except Exception as e:
     # Interactions between each x value and its previous values
     ##########################################################################################################
     for name in diff_x_names:
-        for y in [6]:
+        for y in diff_quarters:
             diff_field_name = '{0}_{1}qtr_diff'.format(name, y)
             df[diff_field_name] = shift_x_quarters(df[name].pow(1./2.), y)
             # df[diff_field_name] = shift_x_quarters(df[name].apply(np.log, args=(1.5,)), y)
