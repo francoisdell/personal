@@ -7,11 +7,13 @@ from datetime import timedelta
 import matplotlib
 matplotlib.use('TkAgg')
 import numpy as np
+from dateutil.relativedelta import relativedelta
 import pandas as pd
 import quandl
 from Settings import Settings
 import wbdata
 import bls
+from statsmodels.tsa.statespace.sarimax import SARIMAX
 import operator
 # from matplotlib import rcParams
 # import yahoo_finance
@@ -83,11 +85,13 @@ stack_include_preds = False
 final_include_data = False
 
 if do_predict_next_recession_method:
-    initial_models = ['linreg','rfor_r','gauss_proc_r','svr','gbr','knn_r']
+    initial_models = ['linreg','rfor_r','svr','gbr','knn_r','elastic_net','pass_agg_r']
     if max_correlation < 1. or max_variables == 0:
-        initial_models.extend(['linreg','gauss_proc_r','elastic_net','svr'])
+        initial_models.extend(['gauss_proc_r'])
 
-    final_models = ['elastic_net_stacking']
+    final_models = ['linreg','gauss_proc_r','elastic_net','svr','elastic_net_stacking']
+    if max_correlation < 1. or max_variables == 0:
+        final_models.extend(['gauss_proc_r','neural_r'])
 
     next_recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
@@ -114,7 +118,7 @@ if do_predict_returns:
 
     final_models = ['elastic_net_stacking','ridge_r','linreg','svr']
     if (not final_include_data) or max_correlation < 1. or max_variables == 0:
-        final_models.extend(['gauss_proc_r'])
+        final_models.extend(['gauss_proc_r','neural_r'])
 
     returns_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
@@ -385,7 +389,6 @@ def predict_returns(df: pd.DataFrame,
         df[forward_y_field_name_pred_fut][train_mask] = np.nan
 
         print(max(df.index))
-        from dateutil.relativedelta import relativedelta
         df = df.reindex(
             pd.DatetimeIndex(start=df.index.min(),
                              end=max(df.index) + relativedelta(months=quarters_forward*3),
@@ -529,7 +532,6 @@ def predict_recession_time(df: pd.DataFrame,
     x_fields = OrderedDict([(v, 'num') for v in x_names])
 
     if do_predict_next_recession_method == 'SARIMAX':
-        from statsmodels.tsa.statespace.sarimax import SARIMAX
         # Generate all different combinations of p, q and q triplets
         # Generate all different combinations of seasonal p, q and q triplets
 
@@ -634,9 +636,6 @@ def predict_recession_time(df: pd.DataFrame,
             #################################
 
             print(max(df.index))
-            from dateutil.relativedelta import relativedelta
-
-
             y_pred_names = m.new_fields
             y_field_name_pred = y_pred_names[0]
             chart_y_field_names = [y_field_name, y_field_name_pred]

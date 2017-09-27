@@ -696,7 +696,8 @@ class Model_Builder:
             for k, v in self.y_field.items():
                 final_preds = y_mappings[k].inverse_transform(y_validate)
                 print('FINAL PREDICTIONS')
-                print(*final_preds[:10])
+                print('First 10: ', *final_preds[:10])
+                print('Last 10: ', *final_preds[-10:])
                 y_pred_name = 'pred_' + k
                 df_validate.loc[:, y_pred_name] = final_preds
                 self.new_fields.extend([y_pred_name])
@@ -989,7 +990,7 @@ class Model_Builder:
             # SOLVER
             if 'solver' in clf.get_params().keys():
                 if isinstance(clf, (MLPRegressor, MLPClassifier)):
-                    grid_param_dict['solver'] = ['adam','libfgs']  # 'sgd' tends to crash the system when used parallel. lbfgs
+                    grid_param_dict['solver'] = ['adam','lbfgs']  # 'sgd' tends to crash the system when used parallel. lbfgs
                 # elif isinstance(clf, (LogisticRegression)):
                 #     grid_param_dict['solver'] = ['liblinear', 'newton-cg', 'lbfgs', 'sag', 'saga']
 
