@@ -48,14 +48,14 @@ do_predict_recessions = False
 do_predict_next_recession_method = False  # None/False, 'SARIMAX', or 'STACKING'
 
 returns_predict_quarters_forward = [36]
-recession_predict_quarters_forward = [1]
+recession_predict_quarters_forward = [4]
 
 # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
 mb_train_pct = 0.8  # Defines the train/test split
-mb_selection_limit = 5.0e-3
+mb_selection_limit = 5.0e-2
 mb_correlation_max = 1 - ((1-0.8) * (1-mb_train_pct))
 
-interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
+interaction_type = None  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
 correlation_type = None  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
 transform_vars = True
 trim_vars = False
@@ -69,7 +69,7 @@ max_correlation = 0  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a 
 
 # DIMENSION REDUCTION. Either PCA Variance or Correlation Rankings
 dimension_method = 'corr'  # Use either None, 'corr' for correlations, or 'pca' for PCA
-max_variables = 0.65  # Options: 0 for 'auto' [n_obs ^ 0.65] or an integer for a specific number of variables.
+max_variables = 1000  # Options: 0 for 'auto' [n_obs ^ 0.65] or an integer for a specific number of variables.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -88,11 +88,11 @@ final_include_data = False
 
 if do_predict_next_recession_method:
     initial_models = ['linreg','rfor_r','svr','gbr','knn_r','elastic_net','pass_agg_r']
-    if max_correlation < 1. or max_variables == 0:
+    if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
         initial_models.extend(['gauss_proc_r'])
 
     final_models = ['linreg','gauss_proc_r','elastic_net','svr','elastic_net_stacking']
-    if max_correlation < 1. or max_variables == 0:
+    if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
         final_models.extend(['gauss_proc_r','neural_r'])
 
     next_recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
@@ -100,7 +100,7 @@ if do_predict_next_recession_method:
 if do_predict_recessions:
     initial_models=['logit','etree_c','nearest_centroid','gbc','bernoulli_nb','svc','rfor_c'] # pass_agg_c
     # initial_models=['logit','etree_c']
-    if max_correlation < 1. or max_variables == 0:
+    if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
         initial_models.extend(['gauss_proc_c', 'neural_c'])
 
     # BEST MODELS: logit, svc, sgd_c, neural_c, gauss_proc_c
@@ -114,12 +114,12 @@ if do_predict_recessions:
     recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
 if do_predict_returns:
-    initial_models = ['rfor_r','gbr','pass_agg_r','elastic_net','knn_r','ridge_r','svr']
-    if max_correlation < 1. or max_variables == 0:
-        initial_models.extend(['gauss_proc_r'])
+    initial_models = ['rfor_r','gbr','pass_agg_r','linreg','elastic_net','knn_r','svr']
+    if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
+        initial_models.extend(['gauss_proc_r','neural_r'])
 
-    final_models = ['elastic_net_stacking','ridge_r','linreg','svr']
-    if (not final_include_data) or max_correlation < 1. or max_variables == 0:
+    final_models = ['elastic_net_stacking','pass_agg_r','linreg','svr','svr']
+    if (not final_include_data) or (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
         final_models.extend(['gauss_proc_r','neural_r'])
 
     returns_models = ModelSet(final_models=final_models, initial_models=initial_models)
