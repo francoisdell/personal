@@ -52,24 +52,25 @@ recession_predict_quarters_forward = [4]
 
 # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
 mb_train_pct = 0.8  # Defines the train/test split
-mb_selection_limit = 5.0e-2
-mb_correlation_max = 1 - ((1-0.8) * (1-mb_train_pct))
+mb_selection_limit = 10.0e-2
+mb_correlation_max = 1 - ((1-0.9) * (1-mb_train_pct))
 
-interaction_type = None  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
+interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
 correlation_type = None  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
 transform_vars = True
 trim_vars = False
 calc_trend_values = True
 calc_std_values = True
 calc_diff_from_trend_values = True
-diff_quarters = [2, 6, 18]
+diff_quarters = [18]
+
 # VARIANCE REDUCTION. Either PCA Variance or Correlation Limits
 correlation_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
-max_correlation = 0  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
+max_correlation = 0.999   # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
 
 # DIMENSION REDUCTION. Either PCA Variance or Correlation Rankings
 dimension_method = 'corr'  # Use either None, 'corr' for correlations, or 'pca' for PCA
-max_variables = 1000  # Options: 0 for 'auto' [n_obs ^ 0.65] or an integer for a specific number of variables.
+max_variables = 0  # Options: 0 for 'auto' [n_obs ^ 0.65] or an integer for a specific number of variables.
 
 # Variables specifying what kinds of predictions to run, and for what time period
 start_dt = '1920-01-01'
@@ -85,47 +86,67 @@ ewm_alpha = 0.125  # Halflife for EWM calculations. 4.2655 corresponds to a 0.12
 default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster, if less ideal.
 stack_include_preds = False
 final_include_data = False
+use_neural_nets = False
 
+
+# SET THE MODELS FOR THE NEXT-RECESSION PREDICTION METHOD
 if do_predict_next_recession_method:
     initial_models = ['linreg','rfor_r','svr','gbr','knn_r','elastic_net','pass_agg_r']
     if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
         initial_models.extend(['gauss_proc_r'])
+        if use_neural_nets:
+            initial_models.extend(['neural_r'])
 
     final_models = ['linreg','gauss_proc_r','elastic_net','svr','elastic_net_stacking']
     if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
-        final_models.extend(['gauss_proc_r','neural_r'])
+        final_models.extend(['gauss_proc_r'])
+        if use_neural_nets:
+            initial_models.extend(['neural_r'])
 
     next_recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
+
+# SET THE MODELS FOR THE RECESSION PREDICTION METHOD
 if do_predict_recessions:
     initial_models=['logit','etree_c','nearest_centroid','gbc','bernoulli_nb','svc','rfor_c'] # pass_agg_c
     # initial_models=['logit','etree_c']
     if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
-        initial_models.extend(['gauss_proc_c', 'neural_c'])
+        initial_models.extend(['gauss_proc_c'])
+        if use_neural_nets:
+            initial_models.extend(['neural_c'])
 
     # BEST MODELS: logit, svc, sgd_c, neural_c, gauss_proc_c
     # Overall best model: svc???
     final_models=['logit','svc']
     if (not final_include_data) or max_correlation < 1. or max_variables == 0:
-        final_models.extend(['gauss_proc_c', 'neural_c'])
-    final_models = 'gauss_proc_c'
+        final_models.extend(['gauss_proc_c'])
+        if use_neural_nets:
+            initial_models.extend(['neural_c'])
 
     # initial_models=['logit','etree_c','nearest_centroid','gbc','bernoulli_nb','svc','pass_agg_c','gauss_proc_c']
     recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
-if do_predict_returns:
-    initial_models = ['rfor_r','gbr','pass_agg_r','linreg','elastic_net','knn_r','svr']
-    if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
-        initial_models.extend(['gauss_proc_r','neural_r'])
 
-    final_models = ['elastic_net_stacking','pass_agg_r','linreg','svr','svr']
+# SET THE MODELS FOR THE RETURNS PREDICTION METHOD
+if do_predict_returns:
+    initial_models = ['rfor_r','gbr','linreg','elastic_net','knn_r','svr']
+    if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
+        initial_models.extend(['gauss_proc_r'])
+        if use_neural_nets:
+            initial_models.extend(['neural_r'])
+
+    final_models = ['elastic_net_stacking','linreg','svr','svr']
     if (not final_include_data) or (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
-        final_models.extend(['gauss_proc_r','neural_r'])
+        final_models.extend(['gauss_proc_r'])
+        if use_neural_nets:
+            initial_models.extend(['neural_r'])
 
     returns_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
+
 if real:
     sp_field_name += '_real'
+
 
 #use the list to filter the local namespace
 # safe_func_list = ['first', 'last', 'mean']
@@ -321,7 +342,8 @@ def predict_returns(df: pd.DataFrame,
                       final_include_data=final_include_data,
                       correlation_max=mb_correlation_max,
                       use_test_set=True,
-                      use_sparse=False
+                      use_sparse=False,
+                      codify_nulls=False
                       )
 
     for df, final_model_name in m.predict():
@@ -468,7 +490,8 @@ def predict_recession(df: pd.DataFrame
                       use_test_set=True,
                       correlation_method='corr',
                       correlation_max=mb_correlation_max,
-                      use_sparse=False
+                      use_sparse=False,
+                      codify_nulls=False
                       # cross_val_iters=(20,20),
                       )
 
@@ -628,7 +651,8 @@ def predict_recession_time(df: pd.DataFrame,
                           use_test_set=True,
                           correlation_method='corr',
                           correlation_max=mb_correlation_max,
-                          use_sparse=False
+                          use_sparse=False,
+                          codify_nulls=False
                           # cross_val_iters=(20,20),
                           )
 
@@ -1178,7 +1202,8 @@ def remove_high_vif(X: pd.DataFrame, max_num: Union[int,float]=None):
 
         from joblib import Parallel, delayed
         while num_vars > max_num:
-            vif = Parallel(n_jobs=-2, verbose=-1)(delayed(variance_inflation_factor)(X.loc[:, colnames].values, ix) for ix in range(X.loc[:, colnames].shape[1]))
+            # vif = Parallel(n_jobs=-1, verbose=-1)(delayed(variance_inflation_factor)(X.loc[:, colnames].values, ix) for ix in range(X.loc[:, colnames].shape[1]))
+            vif = [variance_inflation_factor(X.loc[:, colnames].values, ix) for ix in range(X.loc[:, colnames].shape[1])]
 
             maxloc = vif.index(max(vif))
             print('dropping \'' + X.loc[:, colnames].columns[maxloc] + '\' at index: ' + str(maxloc))
@@ -1187,7 +1212,7 @@ def remove_high_vif(X: pd.DataFrame, max_num: Union[int,float]=None):
         print('Remaining variables:')
         print(colnames)
 
-    return X.loc[:, colnames]
+    return X.loc[:, colnames], colnames.tolist()
 
 def calc_equity_alloc() -> pd.Series:
     nonfin_biz_equity_liab = fred.get_series('NCBEILQ027S', observation_start=start_dt, observation_end=end_dt)
@@ -1610,14 +1635,21 @@ except Exception as e:
     if (dimension_method is not None) and max_variables >= 0:
         if dimension_method == 'corr':
             x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
-            print('X Names Length: {0}'.format(len(x_names)))
         elif dimension_method == 'pca':
             df, x_names = reduce_vars_pca(df=df, field_names=x_names, max_num=max_variables)
+        elif dimension_method == 'vif':
+            df, x_names = remove_high_vif(X=df, max_num=max_variables)
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
     # Create squared and squared-root versions of all the x fields
     ##########################################################################################################
+
+    def create_transformed_field():
+        lol = 1
+        # Parallel(n_jobs=-1, verbose=-1)(delayed(variance_inflation_factor)(X.loc[:, colnames].values, ix) for ix in range(X.loc[:, colnames].shape[1]))
+
+
     if transform_vars:
         print('Creating squared and square root varieties of predictor variables')
         from scipy import stats
@@ -1633,6 +1665,7 @@ except Exception as e:
             # boxcox_lambda = stats.boxcox_normmax(df[v].values)
             # operations['boxcox'] = (stats.boxcox,(boxcox_lambda,))
             for suffix, (op, var) in operations.items():
+
                 new_x_name = '{0}_{1}'.format(v, suffix)
                 df[new_x_name] = df[v].abs().apply(op, args=var) * df[v].apply(lambda x: -1 if x < 0 else 1)
                 new_x_names.append(new_x_name)
@@ -1664,9 +1697,10 @@ except Exception as e:
     if (dimension_method is not None) and max_variables >= 0:
         if dimension_method == 'corr':
             x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
-            print('X Names Length: {0}'.format(len(x_names)))
         elif dimension_method == 'pca':
             df, x_names = reduce_vars_pca(df=df, field_names=x_names, max_num=max_variables)
+        elif dimension_method == 'vif':
+            df, x_names = remove_high_vif(X=df, max_num=max_variables)
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
@@ -1730,15 +1764,15 @@ except Exception as e:
     if (dimension_method is not None) and max_variables >= 0:
         if dimension_method == 'corr':
             x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
-            print('X Names Length: {0}'.format(len(x_names)))
         elif dimension_method == 'pca':
             df, x_names = reduce_vars_pca(df=df, field_names=x_names, max_num=max_variables)
+        elif dimension_method == 'vif':
+            df, x_names = remove_high_vif(X=df, max_num=max_variables)
         print('X Names Length: {0}'.format(len(x_names)))
 
     ##########################################################################################################
     # VARIANCE REDUCTION: Remove any highly correlated fields and/or use pca to eliminate correlation.
     ##########################################################################################################
-
     if (correlation_method is not None) and max_correlation < 1. and dimension_method != 'pca':
         if dimension_method == 'corr':
             x_names = reduce_variance_corr(df=df, fields=x_names, max_corr_val=max_correlation)
