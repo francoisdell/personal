@@ -413,6 +413,7 @@ class Model_Builder:
             if self.model_type.initial_models:
                 if self.final_include_data:
                     self.x_fields = {**self.x_fields, **pred_x_fields}
+                    x_mappings = {**x_mappings, **pred_x_mappings}
                 else:
                     self.x_fields = pred_x_fields
 
