@@ -66,7 +66,7 @@ diff_quarters = [18]
 
 # VARIANCE REDUCTION. Either PCA Variance or Correlation Limits
 correlation_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
-max_correlation = 0.999   # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
+max_correlation = 0.90   # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
 
 # DIMENSION REDUCTION. Either PCA Variance or Correlation Rankings
 dimension_method = 'corr'  # Use either None, 'corr' for correlations, or 'pca' for PCA
@@ -1098,6 +1098,7 @@ def reduce_vars_corr(df: pd.DataFrame, field_names: list, max_num: float):
         print('Remaining Fields: {0}'.format(return_x_vals))
         return return_x_vals
     return field_names
+
 
 def reduce_vars_pca(df: pd.DataFrame, field_names: list, max_num: Union[int,float]=None):
     num_vars = len(field_names)-1

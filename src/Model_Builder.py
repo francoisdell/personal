@@ -813,12 +813,15 @@ class Model_Builder:
                         raise
             else:
                 raise
-        except DeprecationWarning as e:
-            print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
-            print(e)
-            x_train = x.reshape(-1, 1)
-            obj.fit(x_train, y)
-            pass
+        except (DeprecationWarning, ValueError) as e:
+            if 'Expected 2D' in str(e):
+                print(e)
+                print('=== Error Caught. Reshaping array to overcome the error. ===')
+                x = x.reshape(-1, 1)
+                obj.fit(x, y)
+                pass
+            else:
+                raise
 
         return obj, x
 
@@ -833,12 +836,15 @@ class Model_Builder:
                 pass
             else:
                 raise
-        except DeprecationWarning as e:
-            print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
-            print(e)
-            x = x.reshape(-1, 1)
-            preds = obj.predict(x)
-            pass
+        except (DeprecationWarning, ValueError) as e:
+            if 'Expected 2D' in str(e):
+                print(e)
+                print('=== Error Caught. Reshaping array to overcome the error. ===')
+                x = x.reshape(-1, 1)
+                preds = obj.predict(x)
+                pass
+            else:
+                raise
 
         return preds, x
 
@@ -853,12 +859,16 @@ class Model_Builder:
                 pass
             else:
                 raise
-        except DeprecationWarning as e:
-            print("YOU NEED TO FIX THE BELOW ERROR SINCE IT WILL BE DEPRECATED")
-            print(e)
-            x = x.reshape(-1, 1)
-            preds = obj.predict_proba(x)
+        except (DeprecationWarning, ValueError) as e:
             pass
+            if 'Expected 2D' in str(e):
+                print(e)
+                print('=== Error Caught. Reshaping array to overcome the error. ===')
+                x = x.reshape(-1, 1)
+                preds = obj.predict_proba(x)
+                pass
+            else:
+                raise
 
         return preds, x
 
