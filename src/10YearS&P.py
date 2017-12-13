@@ -43,11 +43,11 @@ rawdata_from_file = True  # Whether to load the raw data (pre-transformations) f
 finaldata_from_file = False  # Whether to load the final data (post-transformations) from a pickle file
 
 # Do you want to predict returns? Or Recessions?
-do_predict_returns = True
+do_predict_returns = False
 do_predict_recessions = False
-do_predict_next_recession_method = False  # None/False, 'SARIMAX', or 'STACKING'
+do_predict_next_recession_method = 'SARIMAX'  # None/False, 'SARIMAX', or 'STACKING'
 
-returns_predict_quarters_forward = [36]
+returns_predict_quarters_forward = [4]
 recession_predict_quarters_forward = [4]
 
 # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
@@ -718,7 +718,7 @@ class data_source:
             if self.code:
                 self.data = self.provider(self.code)
             else:
-                self.data = self.provider(self.code)
+                self.data = self.provider()
         elif self.provider == 'fred':
             self.data = fred.get_series(self.code
                                         , observation_start=start_dt
@@ -782,6 +782,8 @@ def shift_x_quarters(s: pd.Series, y: int):
 
 
 def impute_if_any_nulls(impute_df: pd.DataFrame, imputer: str=default_imputer):
+    impute_names = impute_df.columns.values.tolist()
+    impute_index = impute_df.index.values
     if impute_df.isnull().any().any():
         print('Running imputation')
         try:
@@ -797,7 +799,16 @@ def impute_if_any_nulls(impute_df: pd.DataFrame, imputer: str=default_imputer):
             imputer = importlib.import_module("knnimpute")
             impute_df = imputer.knn_impute_few_observed(impute_df.values, missing_mask=impute_df.isnull().values, k=5, verbose=verbose)
         # df = solver.complete(df.values)
-    return impute_df
+
+    impute_df = pd.DataFrame(data=impute_df, columns=impute_names,
+                             index=impute_index
+                             )
+    for n in impute_names.copy():
+        if impute_df[n].isnull().any().any():
+            print('Field [{0}] was still empty after imputation! Removing it!'.format(n))
+            impute_names.remove(n)
+
+    return impute_df, impute_names
 
 
 
@@ -925,7 +936,7 @@ def get_std_from_ewma(s: pd.Series, field_name: str, alpha: float=ewm_alpha/4) -
     return d, [new_name_std_from_ewma]
 
 
-def get_diff_from_trend(s: pd.Series, field_name: str) -> (pd.DataFrame, list):
+def get_diff_from_trend(s: pd.Series) -> (pd.DataFrame, list):
 
     N = len(s.values)
     from sklearn import linear_model
@@ -965,7 +976,7 @@ def get_diff_from_trend(s: pd.Series, field_name: str) -> (pd.DataFrame, list):
     if False:
         # plot results
         plt.subplot(1, 1, 1)
-        plt.plot(n, s, label='series {0}'.format(field_name), lw=2)
+        plt.plot(n, s, label='series {0}'.format(s.name), lw=2)
 
         # linear model
         m = linmod.coef_[0]
@@ -998,7 +1009,7 @@ def get_diff_from_trend(s: pd.Series, field_name: str) -> (pd.DataFrame, list):
         trend = exponential
 
 
-    new_name_vs_trend = field_name + '_vs_trend'
+    new_name_vs_trend = s.name + '_vs_trend'
     d = pd.DataFrame(s / trend, columns=[new_name_vs_trend])
     return d, [new_name_vs_trend]
 
@@ -1090,7 +1101,7 @@ def reduce_vars_corr(df: pd.DataFrame, field_names: list, max_num: float):
         # Creates Correlation Matrix
         corr_matrix = df.loc[:, field_names].corr()
 
-        max_corr = [(fld, corr_matrix.iloc[i+1, :(i)].max()) for i, fld in reverse_enumerate(field_names[1:])]
+        max_corr = [(fld, corr_matrix.iloc[i+1, :i].max()) for i, fld in reverse_enumerate(field_names[1:])]
         max_corr.sort(key=lambda tup: tup[1])
 
         return_x_vals = [fld for fld, corr in max_corr[:max_num]]
@@ -1285,7 +1296,7 @@ data_sources['netexp_nom'] = data_source('NETEXP', 'fred')
 data_sources['gdp_nom'] = data_source('GDP', 'fred')
 data_sources['sp500'] = data_source('P', 'schiller')
 data_sources['cape'] = data_source('CAPE', 'schiller')
-data_sources['tsy_3mo_yield'] = data_source('DGS5', 'fred')
+data_sources['tsy_3mo_yield'] = data_source('DGS3', 'fred')
 data_sources['tsy_5yr_yield'] = data_source('DGS5', 'fred')
 data_sources['tsy_10yr_yield'] = data_source('DGS10', 'fred')
 data_sources['tsy_30yr_yield'] = data_source('DGS30', 'fred')
@@ -1392,6 +1403,7 @@ except Exception as e:
         else:
             df[k] = ds.data
 
+    end_dt = df.index.max()
 
     df['tsy_3mo_yield'] = df['tsy_3mo_yield'] / 100.
     df['tsy_5yr_yield'] = df['tsy_5yr_yield'] / 100.
@@ -1461,8 +1473,11 @@ except Exception as e:
     # non_null_mask = ~pd.isnull(df.loc[:, x_names]).any(axis=1).values  # Periods where ANY data points exist
     df = df.loc[non_null_mask, :]
 
-    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+    imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+    df.loc[:, x_names] = imputed_df
 
+    print(imputed_df['equity_alloc'])
+    print(df['equity_alloc'])
     ##########################################################################################################
     # Derive trend metric variables
     ##########################################################################################################
@@ -1495,11 +1510,12 @@ except Exception as e:
         # Add x-variables for time since the last rise, and time since the last fall, in the SP500
         # for x in ['sp500']:
         for x in x_names.copy():
-            temp_df, new_x_names = get_diff_from_trend(df[x], x)
+            if not df[x].isnull().any():
+                temp_df, new_x_names = get_diff_from_trend(df[x])
 
-            # print(new_x_names)
-            df = df.join(temp_df[new_x_names], how='inner')
-            trend_x_names.extend(new_x_names)
+                # print(new_x_names)
+                df = df.join(temp_df[new_x_names], how='inner')
+                trend_x_names.extend(new_x_names)
 
     ##########################################################################################################
     # Derive difference variables to demonstrate changes from period to period
@@ -1566,15 +1582,16 @@ except Exception as e:
     ##########################################################################################################
     # Value Imputation
     ##########################################################################################################
-    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+    imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+    df.loc[:, x_names] = imputed_df.values
 
     ##########################################################################################################
     # If even after imputation, some fields are empty, then you need to remove them
     ##########################################################################################################
-    for n in x_names.copy():
-        if df[n].isnull().any():
-            print('Field [{0}] was still empty after imputation! Removing it!'.format(n))
-            x_names.remove(n)
+    # for n in x_names.copy():
+    #     if df[n].isnull().any():
+    #         print('Field [{0}] was still empty after imputation! Removing it!'.format(n))
+    #         x_names.remove(n)
 
     ##########################################################################################################
     # Convert all x fields to EWMA versions, to smooth craziness
@@ -1604,7 +1621,8 @@ except Exception as e:
     ##########################################################################################################
     # Value Imputation
     ##########################################################################################################
-    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+    imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+    df.loc[:, x_names] = imputed_df
 
     ##########################################################################################################
     # Create and add any interaction terms
@@ -1679,7 +1697,8 @@ except Exception as e:
     if corr_x_names:
         x_names.extend(corr_x_names)
         # IMPUTE VALUES!!!
-        df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+        imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+        df.loc[:, x_names] = imputed_df
         print('X Names Length: {0}'.format(len(x_names)))
 
     if trend_x_names:
@@ -1689,7 +1708,8 @@ except Exception as e:
                 df[new_field_name] = df[v].ewm(alpha=ewm_alpha).mean()
             x_names.append(new_field_name)
         # IMPUTE VALUES!!!
-        df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+        imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+        df.loc[:, x_names] = imputed_df
         print('X Names Length: {0}'.format(len(x_names)))
 
     ################################################################################################################
@@ -1712,24 +1732,28 @@ except Exception as e:
         rec_val = df.get_value(period, 'recession_usa')
         if rec_val == 1:
             for i, v in enumerate(df.iloc[last_rec:idx, :].index.values):
-                df.set_value(v, next_rec_field_name, idx - last_rec - i)
+                df.at[v, next_rec_field_name] = idx - last_rec - i
             last_rec = idx
             if idx > 0:
                 next_val = min(df[prev_rec_field_name].iloc[idx-1] - 1, 0)
             else:
                 next_val = -2
-            df.set_value(period, prev_rec_field_name, next_val)
+            df.at[period, prev_rec_field_name] = next_val
         elif rec_val == 0:
-            df.set_value(period, prev_rec_field_name, idx - last_rec)
+            df.at[period, prev_rec_field_name] = idx - last_rec
     x_names.append(prev_rec_field_name)
 
     # print(*df.index.values, sep='\n')
 
     if do_predict_next_recession_method:
-        df[x_names+[next_rec_field_name]] = impute_if_any_nulls(df[x_names+[next_rec_field_name]], imputer=default_imputer)
+        imputed_df, x_names = impute_if_any_nulls(df[x_names+[next_rec_field_name]], imputer=default_imputer)
+        df.loc[:, x_names+[next_rec_field_name]] = imputed_df
+
+        # df[x_names+[next_rec_field_name]] = impute_if_any_nulls(df[x_names+[next_rec_field_name]], imputer=default_imputer)
     else:
         # x_names.append(next_rec_field_name)
-        df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+        imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+        df.loc[:, x_names] = imputed_df
 
     ##########################################################################################################
     # Derive special predictor variables
@@ -1756,8 +1780,8 @@ except Exception as e:
             df = df.join(temp_df[new_x_names], how='inner')
             x_names.extend(new_x_names)
 
-
-    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+    imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+    df.loc[:, x_names] = imputed_df
 
     ################################################################################################################
     # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
@@ -1818,7 +1842,8 @@ if do_predict_next_recession_method:
         # new_field_name = 'next_recession_{0}'.format(report_name)
         x_names.append([v for v in d.keys()][-1])
 
-    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+    imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+    df.loc[:, x_names] = imputed_df
 
 # RECESSION PREDICTIONS
 if do_predict_recessions:
@@ -1835,7 +1860,8 @@ if do_predict_recessions:
             for v in [v for v in list(d)][-2:]:
                 x_names.append(v)
 
-    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+    imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+    df.loc[:, x_names] = imputed_df
 
 if do_predict_returns:
     for yf in returns_predict_quarters_forward:
@@ -1850,8 +1876,8 @@ if do_predict_returns:
 
             new_field_name = 'sp500_{0}'.format(report_name)
 
-    df[x_names] = impute_if_any_nulls(df[x_names], imputer=default_imputer)
-
+    imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+    df.loc[:, x_names] = imputed_df
 
 
 
