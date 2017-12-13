@@ -797,29 +797,19 @@ class Model_Builder:
     def resilient_fit(self, obj, x, y) -> (object, object):
         try:
             obj.fit(x, y)
-        except (TypeError, ValueError) as e:
-            if "dense" in str(e) and 'overflow' not in str(e):
-                try:
-                    x = x.toarray()
-                    self.use_sparse = False
-                    obj.fit(x, y)
-                    pass
-                except (TypeError, ValueError) as e:
-                    if obj.n_jobs != 1:
-                        obj.n_jobs = 1
-                        obj.fit(x, y)
-                        pass
-                    else:
-                        raise
-            else:
-                raise
-        except (DeprecationWarning, ValueError) as e:
-            if 'Expected 2D' in str(e):
-                print(e)
-                print('=== Error Caught. Reshaping array to overcome the error. ===')
+        except (TypeError, ValueError, DeprecationWarning) as e:
+            if 'overflow' in str(e) and obj.n_jobs != 1:
+                obj.n_jobs = 1
+                return self.resilient_fit(obj, x, y)
+            elif "dense" in str(e) and sparse.issparse(x):
+                x = x.toarray()
+                self.use_sparse = False
+                return self.resilient_fit(obj, x, y)
+            elif 'Expected 2D' in str(e):
+                # print(e)
+                print('=== 1D Array Error Caught. Reshaping array to overcome the error. ===')
                 x = x.reshape(-1, 1)
-                obj.fit(x, y)
-                pass
+                return self.resilient_fit(obj, x, y)
             else:
                 raise
 
@@ -828,21 +818,19 @@ class Model_Builder:
     def resilient_predict(self, obj, x) -> (object, object):
         try:
             preds = obj.predict(x)
-        except (TypeError, ValueError) as e:
-            if "dense" in str(e):
+        except (TypeError, ValueError, DeprecationWarning) as e:
+            if 'overflow' in str(e) and obj.n_jobs != 1:
+                obj.n_jobs = 1
+                return self.resilient_predict(obj, x)
+            elif "dense" in str(e) and sparse.issparse(x):
                 x = x.toarray()
                 self.use_sparse = False
-                preds = obj.predict(x)
-                pass
-            else:
-                raise
-        except (DeprecationWarning, ValueError) as e:
-            if 'Expected 2D' in str(e):
-                print(e)
-                print('=== Error Caught. Reshaping array to overcome the error. ===')
+                return self.resilient_predict(obj, x)
+            elif 'Expected 2D' in str(e):
+                # print(e)
+                print('=== 1D Array Error Caught. Reshaping array to overcome the error. ===')
                 x = x.reshape(-1, 1)
-                preds = obj.predict(x)
-                pass
+                return self.resilient_predict(obj, x)
             else:
                 raise
 
@@ -851,22 +839,19 @@ class Model_Builder:
     def resilient_predict_probs(self, obj, x) -> (object, object):
         try:
             preds = obj.predict_proba(x)
-        except (TypeError, ValueError) as e:
-            if "dense" in str(e):
+        except (TypeError, ValueError, DeprecationWarning) as e:
+            if 'overflow' in str(e) and obj.n_jobs != 1:
+                obj.n_jobs = 1
+                return self.resilient_predict_probs(obj, x)
+            elif "dense" in str(e) and sparse.issparse(x):
                 x = x.toarray()
                 self.use_sparse = False
-                preds = obj.predict_proba(x)
-                pass
-            else:
-                raise
-        except (DeprecationWarning, ValueError) as e:
-            pass
-            if 'Expected 2D' in str(e):
-                print(e)
-                print('=== Error Caught. Reshaping array to overcome the error. ===')
+                return self.resilient_predict_probs(obj, x)
+            elif 'Expected 2D' in str(e):
+                # print(e)
+                print('=== 1D Array Error Caught. Reshaping array to overcome the error. ===')
                 x = x.reshape(-1, 1)
-                preds = obj.predict_proba(x)
-                pass
+                return self.resilient_predict_probs(obj, x)
             else:
                 raise
 

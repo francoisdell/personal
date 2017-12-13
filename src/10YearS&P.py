@@ -1474,7 +1474,8 @@ except Exception as e:
     df = df.loc[non_null_mask, :]
 
     imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
-    df.loc[:, x_names] = imputed_df
+    for n in x_names:
+        df[n] = imputed_df[n]
 
     print(imputed_df['equity_alloc'])
     print(df['equity_alloc'])
@@ -1583,7 +1584,8 @@ except Exception as e:
     # Value Imputation
     ##########################################################################################################
     imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
-    df.loc[:, x_names] = imputed_df.values
+    for n in x_names:
+        df[n] = imputed_df[n]
 
     ##########################################################################################################
     # If even after imputation, some fields are empty, then you need to remove them
@@ -1622,7 +1624,8 @@ except Exception as e:
     # Value Imputation
     ##########################################################################################################
     imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
-    df.loc[:, x_names] = imputed_df
+    for n in x_names:
+        df[n] = imputed_df[n]
 
     ##########################################################################################################
     # Create and add any interaction terms
@@ -1698,7 +1701,8 @@ except Exception as e:
         x_names.extend(corr_x_names)
         # IMPUTE VALUES!!!
         imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
-        df.loc[:, x_names] = imputed_df
+        for n in x_names:
+            df[n] = imputed_df[n]
         print('X Names Length: {0}'.format(len(x_names)))
 
     if trend_x_names:
@@ -1709,7 +1713,8 @@ except Exception as e:
             x_names.append(new_field_name)
         # IMPUTE VALUES!!!
         imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
-        df.loc[:, x_names] = imputed_df
+        for n in x_names:
+            df[n] = imputed_df[n]
         print('X Names Length: {0}'.format(len(x_names)))
 
     ################################################################################################################
@@ -1747,13 +1752,14 @@ except Exception as e:
 
     if do_predict_next_recession_method:
         imputed_df, x_names = impute_if_any_nulls(df[x_names+[next_rec_field_name]], imputer=default_imputer)
-        df.loc[:, x_names+[next_rec_field_name]] = imputed_df
-
+        for n in x_names:
+            df[n] = imputed_df[n]
         # df[x_names+[next_rec_field_name]] = impute_if_any_nulls(df[x_names+[next_rec_field_name]], imputer=default_imputer)
     else:
         # x_names.append(next_rec_field_name)
         imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
-        df.loc[:, x_names] = imputed_df
+        for n in x_names:
+            df[n] = imputed_df[n]
 
     ##########################################################################################################
     # Derive special predictor variables
@@ -1781,7 +1787,8 @@ except Exception as e:
             x_names.extend(new_x_names)
 
     imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
-    df.loc[:, x_names] = imputed_df
+    for n in x_names:
+        df[n] = imputed_df[n]
 
     ################################################################################################################
     # DIMENSION REDUCTION: Remove any highly correlated items from the regression, to reduce issues with the model #
@@ -1843,7 +1850,8 @@ if do_predict_next_recession_method:
         x_names.append([v for v in d.keys()][-1])
 
     imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
-    df.loc[:, x_names] = imputed_df
+    for n in x_names:
+        df[n] = imputed_df[n]
 
 # RECESSION PREDICTIONS
 if do_predict_recessions:
@@ -1861,7 +1869,8 @@ if do_predict_recessions:
                 x_names.append(v)
 
     imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
-    df.loc[:, x_names] = imputed_df
+    for n in x_names:
+        df[n] = imputed_df[n]
 
 if do_predict_returns:
     for yf in returns_predict_quarters_forward:
@@ -1877,8 +1886,8 @@ if do_predict_returns:
             new_field_name = 'sp500_{0}'.format(report_name)
 
     imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
-    df.loc[:, x_names] = imputed_df
-
+    for n in x_names:
+        df[n] = imputed_df[n]
 
 
 
