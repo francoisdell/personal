@@ -916,10 +916,26 @@ class Model_Builder:
                 clf = ElasticNet()
             elif model.model_class == 'elastic_net_stacking':
                 clf = ElasticNet(positive=True)  # Used positive=True to make this ideal for stacking
-            elif model.model_class == 'neural_c':
+            elif 'neural_c' in model.model_class:
                 clf = MLPClassifier(learning_rate='adaptive', early_stopping=True)
-            elif model.model_class == 'neural_r':
+                if is_number(model.model_class[-1]):
+                    nn_layers = int(model.model_class[-1])
+                else:
+                    nn_layers = 1
+                x_levels = len(x_columns)
+                layer_size = max(int(math.pow(x_levels, 0.5 / nn_layers)), 1)
+                layer_sizes = [layer_size for l in range(nn_layers)]
+                clf.hidden_layer_sizes = layer_sizes
+            elif 'neural_r' in model.model_class:
                 clf = MLPRegressor(learning_rate='adaptive', early_stopping=True)
+                if is_number(model.model_class[-1]):
+                    nn_layers = int(model.model_class[-1])
+                else:
+                    nn_layers = 1
+                x_levels = len(x_columns)
+                layer_size = max(int(math.pow(x_levels, 0.5 / nn_layers)), 1)
+                layer_sizes = [layer_size for l in range(nn_layers)]
+                clf.hidden_layer_sizes = layer_sizes
             elif model.model_class == 'svc':
                 clf = SVC()
             elif model.model_class == 'svr':
@@ -1146,14 +1162,18 @@ class Model_Builder:
                         print('Grid Regression Best Score:', grid.best_score_)
                         print('Grid Regression Best Estimator:', grid.best_estimator_)
                         clf = grid.best_estimator_
-                        model.trained_model = clf
-                        model.grid_param_dict = grid_param_dict
-                        model.x_columns = x_columns
-                        for k, v in grid.cv_results_.items():
-                            if isinstance(v, (list, np.ndarray)) and all(
-                                    [isinstance(v1, (float, complex, int, Number)) for v1 in v]):
-                                v = mean(v)
-                            print('{0}\t: {1}'.format(k, v))
+                        if clf is not None:
+                            model.trained_model = clf
+                            model.grid_param_dict = grid_param_dict
+                            model.x_columns = x_columns
+                            for k, v in grid.cv_results_.items():
+                                if isinstance(v, (list, np.ndarray)) and all(
+                                        [isinstance(v1, (float, complex, int, Number)) for v1 in v]):
+                                    v = mean(v)
+                                print('{0}\t: {1}'.format(k, v))
+                        else:
+                            raise ValueError('Grid CV Regression of model [{0}] did not produce a best estimator'
+                                             .format(model))
                     break
 
                 except (ValueError) as e:
@@ -1284,7 +1304,8 @@ class Model_Builder:
                 mkdict = lambda row: dict((col, row[col]) for col in [f])
                 matrix = trained_models[f].transform(df.apply(mkdict, axis=1)).transpose()
                 for v in trained_models[f].get_feature_names():
-                    final_matrix[v] = matrix
+                    # final_matrix[v] = matrix
+                    # final_matrix = matrix
                     column_names.append((v, True, f))
 
             else:
@@ -1292,8 +1313,7 @@ class Model_Builder:
                     matrix = trained_models[f].transform(df[f].values.astype(str)).transpose()
                     for v in trained_models[f].get_feature_names():
                         # Change to false if you want to eliminate the (MANY) possible words
-                        column_names.append(
-                            (v.encode('ascii', errors='ignore').decode('utf-8', errors='ignore'), True, f))
+                        column_names.append((v.encode('ascii', errors='ignore').decode('utf-8', errors='ignore'), True, f))
 
                 # else:
                 elif t == 'num':

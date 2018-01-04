@@ -20,6 +20,8 @@ import operator
 from joblib import Parallel, delayed
 import itertools
 from sklearn import feature_selection as sk_feat_sel
+from scipy.stats import logistic
+from sklearn import preprocessing as sk_prep
 from statsmodels import robust
 from fredapi import Fred
 from matplotlib import pyplot as plt
@@ -44,11 +46,11 @@ finaldata_from_file = False  # Whether to load the final data (post-transformati
 
 # Do you want to predict returns? Or Recessions?
 do_predict_returns = False
-do_predict_recessions = False
-do_predict_next_recession_method = 'SARIMAX'  # None/False, 'SARIMAX', or 'STACKING'
+do_predict_recessions = True
+do_predict_next_recession_method = None  # None/False, 'SARIMAX', or 'STACKING'
 
-returns_predict_quarters_forward = [4]
-recession_predict_quarters_forward = [4]
+returns_predict_quarters_forward = [6]
+recession_predict_quarters_forward = [6]
 
 # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
 mb_train_pct = 0.8  # Defines the train/test split
@@ -83,10 +85,12 @@ next_rec_field_name = 'recession_usa_time_until_next'
 verbose = False
 fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
 ewm_alpha = 0.125  # Halflife for EWM calculations. 4.2655 corresponds to a 0.125 weight.
+use_vwma = True
 default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster, if less ideal.
 stack_include_preds = False
 final_include_data = False
 use_neural_nets = False
+exec_time = datetime.strftime(datetime.now(), '%Y-%m-%d-%H-%M-%S')
 
 
 # SET THE MODELS FOR THE NEXT-RECESSION PREDICTION METHOD
@@ -101,7 +105,7 @@ if do_predict_next_recession_method:
     if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
         final_models.extend(['gauss_proc_r'])
         if use_neural_nets:
-            initial_models.extend(['neural_r'])
+            final_models.extend(['neural_r'])
 
     next_recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
@@ -113,15 +117,15 @@ if do_predict_recessions:
     if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
         initial_models.extend(['gauss_proc_c'])
         if use_neural_nets:
-            initial_models.extend(['neural_c'])
+            initial_models.extend(['neural_c_2'])
 
     # BEST MODELS: logit, svc, sgd_c, neural_c, gauss_proc_c
     # Overall best model: svc???
-    final_models=['logit','svc']
+    final_models=['logit', 'svc']
     if (not final_include_data) or max_correlation < 1. or max_variables == 0:
         final_models.extend(['gauss_proc_c'])
         if use_neural_nets:
-            initial_models.extend(['neural_c'])
+            final_models.extend(['neural_c'])
 
     # initial_models=['logit','etree_c','nearest_centroid','gbc','bernoulli_nb','svc','pass_agg_c','gauss_proc_c']
     recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
@@ -139,7 +143,7 @@ if do_predict_returns:
     if (not final_include_data) or (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
         final_models.extend(['gauss_proc_r'])
         if use_neural_nets:
-            initial_models.extend(['neural_r'])
+            final_models.extend(['neural_r'])
 
     returns_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
@@ -429,7 +433,7 @@ def predict_returns(df: pd.DataFrame,
               , ys=[[forward_y_field_name, forward_y_field_name_pred, 'tsy_10yr_yield'], [y_field_name, y_field_name_pred]]
               , invert=[False, False]
               , log_scale=[False, True]
-              , save_name='_'.join([forward_y_field_name_pred, report_name, str(quarters_forward)])
+              , save_name='_'.join([exec_time, forward_y_field_name_pred, report_name, str(quarters_forward)])
               , title='_'.join([y_field_name, report_name]))
 
         yield (OrderedDict(((forward_y_field_name, df[forward_y_field_name]),
@@ -524,7 +528,7 @@ def predict_recession(df: pd.DataFrame
               , ys=[['sp500'], chart_y_field_names]
               , invert=[False, False]
               , log_scale=[True, False]
-              , save_name='_'.join([forward_y_field_name_pred, report_name])
+              , save_name='_'.join([exec_time, forward_y_field_name_pred, report_name])
               , title='_'.join([y_field_name, report_name]))
 
         yield (OrderedDict((
@@ -606,7 +610,7 @@ def predict_recession_time(df: pd.DataFrame,
               , ys=[['sp500'], [y_field_name, y_field_name_pred, 'tsy_10yr_yield']]
               , invert=[False, False]
               , log_scale=[True, False]
-              , save_name='_'.join([y_field_name_pred, report_name])
+              , save_name='_'.join([exec_time, y_field_name_pred, report_name])
               , title='_'.join([y_field_name, report_name]))
 
         yield (OrderedDict((
@@ -676,7 +680,7 @@ def predict_recession_time(df: pd.DataFrame,
                   , ys=[['sp500'], [y_field_name, y_field_name_pred, 'tsy_10yr_yield']]
                   , invert=[False, False]
                   , log_scale=[True, False]
-                  , save_name='_'.join([y_field_name_pred, report_name])
+                  , save_name='_'.join([exec_time, y_field_name_pred, report_name])
                   , title='_'.join([y_field_name, report_name]))
 
             yield (OrderedDict((
@@ -1025,6 +1029,48 @@ def time_since_last_true(s: pd.Series) -> pd.Series:
     return s
 
 
+def vwma(vals: pd.Series, mean_alpha: float=0.125, verbose: bool=False):
+    diff_vals = vals / vals.shift(1)
+    if verbose:
+        print(diff_vals)
+        print(len(diff_vals))
+    diff_vals.dropna(inplace=True)
+    scaler_std = sk_prep.StandardScaler()
+    normal_vol_ewma = scaler_std.fit_transform(diff_vals.values.reshape(-1, 1))
+    normal_vol_ewma = [logistic.cdf(v[0]) for v in normal_vol_ewma]
+    avg_ewm_factor = mean_alpha/0.5
+    alphas = [v * avg_ewm_factor for v in normal_vol_ewma]
+    alphas = [mean_alpha] + alphas
+    if verbose:
+        print('Length of alphas list: ', len(alphas))
+        print('Length of values list: ', len(vals))
+    final_data = pd.DataFrame(data=list(zip(vals, alphas)), columns=['vals', 'alpha'])
+    cume_alphas = None
+    last_vwma = None
+    for idx, val, alpha in final_data.itertuples():
+        if idx == 0:
+            cume_alphas = mean_alpha
+            vwma = val
+        else:
+            cume_alphas += (alpha * (1-cume_alphas))
+            adj_alpha = alpha / cume_alphas
+            vwma = (val * adj_alpha) + (last_vwma * (1-adj_alpha))
+        final_data.at[idx, 'cume_alphas'] = cume_alphas
+        final_data.at[idx, 'vwma'] = vwma
+        last_vwma = vwma
+        # print(val, alpha)
+
+    # print(sum(normal_vol_ewma)/len(normal_vol_ewma))
+    if verbose:
+        print('==== Head ====')
+        print(final_data.head(10))
+        print('==== Tail ====')
+        print(final_data.tail(10))
+        print(len(final_data['vwma']))
+
+    return final_data['vwma']
+
+
 def get_level1_correlations(df: pd.DataFrame, x_names: list, top_n: int=-1):
     # Interactions between two different fields, generated through exponentiall weighted correlations
     print('Adding correlation terms')
@@ -1098,6 +1144,8 @@ def reduce_vars_corr(df: pd.DataFrame, field_names: list, max_num: float):
 
     if num_vars > max_num:
 
+        if df.isnull().any().any():
+            df, field_names = impute_if_any_nulls(df[df.columns].astype(float))
         # Creates Correlation Matrix
         corr_matrix = df.loc[:, field_names].corr()
 
@@ -1107,8 +1155,9 @@ def reduce_vars_corr(df: pd.DataFrame, field_names: list, max_num: float):
         return_x_vals = [fld for fld, corr in max_corr[:max_num]]
         print('Number of Remaining Fields: {0}'.format(len(return_x_vals)))
         print('Remaining Fields: {0}'.format(return_x_vals))
-        return return_x_vals
-    return field_names
+        return df, return_x_vals
+
+    return df, field_names
 
 
 def reduce_vars_pca(df: pd.DataFrame, field_names: list, max_num: Union[int,float]=None):
@@ -1343,6 +1392,9 @@ data_sources['nyse_margin_debt'] = data_source('Margin debt', get_nyse_margin_de
 data_sources['nyse_margin_credit'] = data_source('Credit balances in margin accounts', get_nyse_margin_debt)
 data_sources['us_dollar_index'] = data_source('DTWEXM', 'fred')
 data_sources['recession_usa'] = data_source('USREC', 'fred')
+data_sources['nonfin_gross_val'] = data_source('A455RC1Q027SBEA', 'fred')
+data_sources['nonfin_equity_liability'] = data_source('NCBEILQ027S', 'fred')
+data_sources['fin_equity_liability'] = data_source('FBCELLQ027S', 'fred')
 
 ds_names = [k for k in data_sources.keys()]
 
@@ -1422,6 +1474,7 @@ except Exception as e:
     df['m1_usage'] = df['m1_velocity'] * df['m1_moneystock']
     df['m2_usage'] = df['m2_velocity'] * df['m2_moneystock']
     df['nyse_margin_debt_ratio'] = df['nyse_margin_debt'] / df['nyse_margin_credit']
+    df['corp_eq_div_nom_gdp'] = df['fin_equity_liability'] / df['gdp_nom']
 
     x_names = [
         'equity_alloc',
@@ -1457,6 +1510,8 @@ except Exception as e:
         'm2_usage',
         'm1_usage',
         'employment_pop_ratio',
+        'nonfin_gross_val',
+        'corp_eq_div_nom_gdp',
     ]
 
     empty_cols = [c for c in df.columns.values if all(df[c].isnull())]
@@ -1565,6 +1620,8 @@ except Exception as e:
         'employment_pop_ratio',
         'nyse_margin_debt',
         'us_dollar_index',
+        'nonfin_gross_val',
+        'corp_eq_div_nom_gdp',
         # 'nyse_margin_credit',  # has an odd discontunuity in the credit balances in Jan 85. Adjust before using.
         # 'nyse_margin_debt_ratio',  # has an odd discontunuity in the credit balances in Jan 85. Adjust before using.
     ]
@@ -1601,9 +1658,15 @@ except Exception as e:
     print('Converting fields to EWMA fields.')
     new_x_names = []
     for v in x_names:
-        new_field_name = v + '_ewma'
+        if use_vwma:
+            new_field_name = v + '_vwma'
+        else:
+            new_field_name = v + '_ewma'
         if new_field_name not in df.columns.values:
-            df[new_field_name] = df[v].ewm(alpha=ewm_alpha).mean()
+            if use_vwma:
+                df[new_field_name] = vwma(df[v], mean_alpha=ewm_alpha)
+            else:
+                df[new_field_name] = df[v].ewm(alpha=ewm_alpha).mean()
         new_x_names.append(new_field_name)
     x_names = new_x_names
 
@@ -1656,7 +1719,7 @@ except Exception as e:
     ###############################################################################################################
     if (dimension_method is not None) and max_variables >= 0:
         if dimension_method == 'corr':
-            x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
+            df, x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
         elif dimension_method == 'pca':
             df, x_names = reduce_vars_pca(df=df, field_names=x_names, max_num=max_variables)
         elif dimension_method == 'vif':
@@ -1707,9 +1770,15 @@ except Exception as e:
 
     if trend_x_names:
         for v in trend_x_names:
-            new_field_name = v + '_ewma'
+            if use_vwma:
+                new_field_name = v + '_vwma'
+            else:
+                new_field_name = v + '_ewma'
             if new_field_name not in df.columns.values:
-                df[new_field_name] = df[v].ewm(alpha=ewm_alpha).mean()
+                if use_vwma:
+                    df[new_field_name] = vwma(df[v], mean_alpha=ewm_alpha)
+                else:
+                    df[new_field_name] = df[v].ewm(alpha=ewm_alpha).mean()
             x_names.append(new_field_name)
         # IMPUTE VALUES!!!
         imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
@@ -1722,7 +1791,7 @@ except Exception as e:
     ################################################################################################################
     if (dimension_method is not None) and max_variables >= 0:
         if dimension_method == 'corr':
-            x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
+            df, x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
         elif dimension_method == 'pca':
             df, x_names = reduce_vars_pca(df=df, field_names=x_names, max_num=max_variables)
         elif dimension_method == 'vif':
@@ -1795,7 +1864,7 @@ except Exception as e:
     ################################################################################################################
     if (dimension_method is not None) and max_variables >= 0:
         if dimension_method == 'corr':
-            x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
+            df, x_names = reduce_vars_corr(df=df, field_names=x_names, max_num=max_variables)
         elif dimension_method == 'pca':
             df, x_names = reduce_vars_pca(df=df, field_names=x_names, max_num=max_variables)
         elif dimension_method == 'vif':
@@ -1889,6 +1958,7 @@ if do_predict_returns:
     for n in x_names:
         df[n] = imputed_df[n]
 
+print('==== Execution Complete ====')
 
 
 ##### OLD STUFF
