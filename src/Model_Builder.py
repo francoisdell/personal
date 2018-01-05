@@ -351,8 +351,8 @@ class Model_Builder:
                 # y_all = np.atleast_1d(y_all)
                 preds = y_mappings[k].inverse_transform(y_all)
                 print('INTERMEDIATE PREDICTIONS')
-                print("First 10: ", *preds[:10])
-                print("Last 10: ", *preds[-10:])
+                print("First 7: ", *preds[:10])
+                print("Last 7: ", *preds[-10:])
 
                 new_x_fields = {}
                 if calculate_probs:
@@ -703,8 +703,8 @@ class Model_Builder:
             for k, v in self.y_field.items():
                 final_preds = y_mappings[k].inverse_transform(y_validate)
                 print('FINAL PREDICTIONS')
-                print('First 10: ', *final_preds[:10])
-                print('Last 10: ', *final_preds[-10:])
+                print('First 7: ', *final_preds[:10])
+                print('Last 7: ', *final_preds[-10:])
                 y_pred_name = 'pred_' + k
                 df_validate.loc[:, y_pred_name] = final_preds
                 self.new_fields.extend([y_pred_name])
@@ -798,7 +798,7 @@ class Model_Builder:
         try:
             obj.fit(x, y)
         except (TypeError, ValueError, DeprecationWarning) as e:
-            if 'Expected 2D' in str(e):
+            if 'Expected 2D' in str(e) and len(x.shape) == 1:
                 # print(e)
                 print('=== 1D Array Error Caught. Reshaping array to overcome the error. ===')
                 x = x.reshape(-1, 1)
@@ -809,6 +809,12 @@ class Model_Builder:
                 return self.resilient_fit(obj, x, y)
             elif obj.n_jobs != 1:
                 obj.n_jobs = 1
+                return self.resilient_fit(obj, x, y)
+            elif 'infs or NaNs' in str(e) and x.dtype == np.float64:
+                x = x.astype(np.float32)
+                return self.resilient_fit(obj, x, y)
+            elif 'infs or NaNs' in str(e) and x.dtype == np.float32:
+                x = x.astype(np.float16)
                 return self.resilient_fit(obj, x, y)
             else:
                 raise
@@ -819,7 +825,7 @@ class Model_Builder:
         try:
             preds = obj.predict(x)
         except (TypeError, ValueError, DeprecationWarning) as e:
-            if 'Expected 2D' in str(e):
+            if 'Expected 2D' in str(e) and len(x.shape) == 1:
                 # print(e)
                 print('=== 1D Array Error Caught. Reshaping array to overcome the error. ===')
                 x = x.reshape(-1, 1)
@@ -830,6 +836,12 @@ class Model_Builder:
                 return self.resilient_predict(obj, x)
             elif obj.n_jobs != 1:
                 obj.n_jobs = 1
+                return self.resilient_predict(obj, x)
+            elif 'infs or NaNs' in str(e) and x.dtype == np.float64:
+                x = x.astype(np.float32)
+                return self.resilient_predict(obj, x)
+            elif 'infs or NaNs' in str(e) and x.dtype == np.float32:
+                x = x.astype(np.float16)
                 return self.resilient_predict(obj, x)
             else:
                 raise
@@ -840,7 +852,7 @@ class Model_Builder:
         try:
             preds = obj.predict_proba(x)
         except (TypeError, ValueError, DeprecationWarning) as e:
-            if 'Expected 2D' in str(e):
+            if 'Expected 2D' in str(e) and len(x.shape) == 1:
                 # print(e)
                 print('=== 1D Array Error Caught. Reshaping array to overcome the error. ===')
                 x = x.reshape(-1, 1)
@@ -851,6 +863,12 @@ class Model_Builder:
                 return self.resilient_predict_probs(obj, x)
             elif obj.n_jobs != 1:
                 obj.n_jobs = 1
+                return self.resilient_predict_probs(obj, x)
+            elif 'infs or NaNs' in str(e) and x.dtype == np.float64:
+                x = x.astype(np.float32)
+                return self.resilient_predict_probs(obj, x)
+            elif 'infs or NaNs' in str(e) and x.dtype == np.float32:
+                x = x.astype(np.float16)
                 return self.resilient_predict_probs(obj, x)
             else:
                 raise
@@ -901,9 +919,9 @@ class Model_Builder:
             elif model.model_class == 'lars':
                 clf = Lars()
             elif model.model_class == 'gauss_proc_c':
-                clf = GaussianProcessClassifier(RBF(1.0))
+                clf = GaussianProcessClassifier()
             elif model.model_class == 'gauss_proc_r':
-                clf = GaussianProcessRegressor(RBF(1.0))
+                clf = GaussianProcessRegressor()
             elif model.model_class == 'lasso':
                 clf = Lasso()
             elif model.model_class == 'lasso_lars':
@@ -1036,10 +1054,13 @@ class Model_Builder:
                 if isinstance(clf, (GradientBoostingRegressor)):
                     vals = [1e-10, 0.0001, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999, 0.9999, 1 - 1e-10]
                 elif isinstance(clf, (RidgeClassifier)):
-                    # vals = [0, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 1]
-                    vals = [1]
+                    vals = [0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999]
+                    # vals = [1]
+                elif isinstance(clf, (GaussianProcessClassifier, GaussianProcessRegressor)) \
+                        and 'darwin' in platform.system().lower():
+                    vals = [1e-6, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999, 1 - 1e-6]
                 else:
-                    vals = [1e-10, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999, 1 - 1e-10]
+                    vals = [1e-8, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999, 1 - 1e-8]
                 # if hasattr(clf, 'learning_rate') and clf.learning_rate == 'optimal':
                 #     del vals[-1]
                 grid_param_dict['alpha'] = vals
@@ -1107,8 +1128,7 @@ class Model_Builder:
             # KERNELS
             if 'kernel' in clf.get_params().keys():
                 if isinstance(clf, (GaussianProcessRegressor, GaussianProcessClassifier)):
-                    grid_param_dict['kernel'] = [RBF(), RationalQuadratic(), WhiteKernel()
-                        , ConstantKernel()]
+                    grid_param_dict['kernel'] = [RBF(), RationalQuadratic(), WhiteKernel(), ConstantKernel()]
                 elif isinstance(clf, (SVC, SVR)):
                     grid_param_dict['kernel'] = ['linear', 'poly', 'rbf',
                                                  'sigmoid']  # LINEAR IS 'Work in progress.' as of 0.19
@@ -1369,6 +1389,8 @@ class Model_Builder:
                     final_matrix.reshape(-1, 1)
                 final_matrix = final_matrix.transpose()
 
+            # if final_matrix.shape[0] > 244:
+            #     lol = 1
             return column_names, final_matrix, trained_models
 
     def matrix_vstack(self, m: tuple, return_sparse: bool = None):
