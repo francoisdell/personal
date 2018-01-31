@@ -190,7 +190,7 @@ class Model_Builder:
             warnings.filterwarnings("ignore", category=UserWarning)
             warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-        elif isinstance(self.model_type, list):
+        if isinstance(self.model_type, list):
             self.model_type = ModelSet(self.model_type[-1], self.model_type[:-1])
         elif isinstance(self.model_type, str):
             self.model_type = ModelSet(self.model_type)
