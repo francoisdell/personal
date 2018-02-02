@@ -201,7 +201,7 @@ def predict_returns(df: pd.DataFrame,
     train_mask = ~df[forward_y_field_name].isnull()
 
     for v in x_names:
-        if not np.isfinite(df[v]).all() or not np.isfinite(df[v].sum()):
+        if not np.isfinite(df[v].astype(float)).all() or not np.isfinite(df[v].astype(float).sum()):
             print('Found Series with non-finite values:{0}'.format(v))
             print(*df[v].values, sep='\n')
             raise Exception("Can't proceed until you fix the Series.")
@@ -1249,7 +1249,7 @@ if __name__ == '__main__':
     mb_selection_limit = 10.0e-2
     mb_correlation_max = 1 - ((1 - 0.9) * (1 - mb_train_pct))
 
-    interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
+    interaction_type = None  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
     correlation_type = None  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
     transform_vars = True
     trim_vars = False
@@ -1263,7 +1263,7 @@ if __name__ == '__main__':
     max_correlation = 0.90  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
 
     # DIMENSION REDUCTION. Either PCA Variance or Correlation Rankings
-    dimension_method = 'pca'  # Use either None, 'corr' for correlations, or 'pca' for PCA
+    dimension_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
     max_variables = 0  # Options: 0 for 'auto' [n_obs^0.75 for corr or n_obs^0.5] or an integer for a specific number of variables.
 
     # Variables specifying what kinds of predictions to run, and for what time period
