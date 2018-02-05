@@ -312,8 +312,7 @@ class Model_Builder:
         # update_df_outer(self.df, y_train)
         # self.df = self.df.combine_first(y_train)
 
-        x_columns, x_mappings = self.get_fields(y_column_names=y_train_names,
-                                                mask=mask_train)
+        x_columns, x_mappings = self.get_fields(y_column_names=y_train_names, mask=mask_train)
 
         if self.verbose:
             print('FIELDS\n', np.asarray(list(self.x_fields.keys())))
@@ -350,14 +349,14 @@ class Model_Builder:
                 print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
 
                 df_valid_iter = self.df.loc[mask_all, :].iloc[min_idx:max_idx]
-                x_valid_columns, x_all, x_mappings = self.get_vectors(df_valid_iter, self.x_fields, x_mappings)
+                x_valid_columns, x_all, x_mappings = self.get_vectors(df_valid_iter.loc[:, list(self.x_fields.keys())], self.x_fields, x_mappings)
                 update_df_outer(self.df, x_all)
                 # print(x_validate)
                 calculate_probs = hasattr(clf, 'classes_') \
                                   and hasattr(clf, 'predict_proba') \
                                   and not (hasattr(clf, 'loss') and clf.loss == 'hinge')
 
-                preds, x_all = self.resilient_predict(clf, x_all)
+                preds, x_all = self.resilient_predict(clf, x_all.loc[:, list(x_columns.keys())])
                 if calculate_probs:
                     pred_probs, x_all = self.resilient_predict_probs(clf, x_all)
                 y_all.append(preds)
@@ -404,13 +403,13 @@ class Model_Builder:
             new_x_mappings = self.train_models(self.df.loc[mask_train, list(new_x_fields.keys())], new_x_fields)
             new_x_columns, new_x_column_df, new_x_mappings = \
                 self.get_vectors(self.df.loc[mask_train, new_x_fields], new_x_fields, new_x_mappings)
+            update_df_outer(self.df, new_x_column_df)
 
             if self.stack_include_preds:
 
-                x_columns.update(new_x_columns)
-                update_df_outer(self.df, new_x_column_df)
-                x_mappings.update(new_x_mappings)
                 self.x_fields.update(new_x_fields)
+                x_mappings.update(new_x_mappings)
+                x_columns.update(new_x_columns)
                 x_columns = self.reduce_dimensions(x_columns, k, mask_train)
 
             else:
@@ -617,7 +616,7 @@ class Model_Builder:
                     print(clf.classes_)
                     print('ACCURACY:\n', metrics.accuracy_score(y_test_df, preds))
                     try:
-                        y_test_probs, x_test_df = self.resilient_predict_probs(clf, x_test_df)
+                        y_test_probs, x_test_df = self.resilient_predict_probs(clf, x_test_df.loc[:, list(x_columns.keys())])
                         if y_test_probs.shape[1] <= 2:
                             print('ROC-CURVE AOC', metrics.roc_auc_score(y_test_df, y_test_probs[:, 1]))
 
@@ -677,7 +676,7 @@ class Model_Builder:
                                   and hasattr(clf, 'predict_proba') \
                                   and not (hasattr(clf, 'loss') and clf.loss == 'hinge')
                 if calculate_probs:
-                    pred_probs, x_validate = self.resilient_predict_probs(clf, x_validate)
+                    pred_probs, x_validate = self.resilient_predict_probs(clf, x_validate.loc[:, list(x_columns.keys())])
                     y_validate_probs.append(pred_probs)
 
                 y_validate.append(preds)
@@ -763,7 +762,8 @@ class Model_Builder:
                                                                          )
                     x_columns = {k: None for k in reduced_x_column_names}
                 else:
-                    raise ValueError('Incorrect variance reduction method provided! [{0}]'.format(method))
+                    raise ValueError('Incorrect variance reduction method provided! [{0}]'.format(
+                        self.correlation_method))
 
                 print('X Names Length: {0}'.format(len(list(x_columns.keys()))))
 
