@@ -278,7 +278,7 @@ class Model_Builder:
         except (FileNotFoundError, ValueError) as e:
             print(e)
         else:
-            retrain_model = True
+            self.retrain_model = True
 
         # If autoregression has been requested, add the autoregression varibales
         # if self.auto_reg_periods > 0:
@@ -305,35 +305,38 @@ class Model_Builder:
 
         y_mappings = self.train_models(self.df.loc[mask_train, :], self.y_field)
         _, y_train, y_mappings = self.get_vectors(self.df.loc[mask_train, :], self.y_field, y_mappings, is_y=True)
-        y_train = y_train.iloc[:,0]
+        y_train_names = y_train.columns.tolist()
         print('Duplicates in self.df index (SHOULD BE 0): ', self.df[self.df.index.duplicated()])
         print('Duplicates in y_train index (SHOULD BE 0): ', y_train[y_train.index.duplicated()])
-        self.df[y_train.name] = y_train
+        update_df_outer(self.df, y_train)
         # update_df_outer(self.df, y_train)
         # self.df = self.df.combine_first(y_train)
 
-        self.df, x_train, self.x_fields, x_columns, x_mappings = \
-            self.get_fields(self.df,
-                            self.x_fields,
-                            y_train,
-                            mask_train,
-                            self.selection_limit,
-                            correlation_reduction=(self.correlation_method, self.correlation_max))
+        x_columns, x_mappings = self.get_fields(y_column_names=y_train_names,
+                                                mask=mask_train)
 
-        pred_x_fields = OrderedDict()
-        pred_x_mappings = OrderedDict()
         if self.verbose:
             print('FIELDS\n', np.asarray(list(self.x_fields.keys())))
 
+        pred_x_fields = OrderedDict()
+        pred_x_mappings = OrderedDict()
+        pred_x_columns = OrderedDict()
+
+        ########################################################################################################
+        # For now we only support 1 y field. In the future we may want to be able to iterate over multiple y-fields
+        #   and churn out predictions for each one. But that's a future problem.
+        k, v = list(self.y_field.items())[0]
+        ########################################################################################################
+
+        ####################################################
+        # INITIAL MODEL TRAINING AND PREDICTION GENERATION #
+        ####################################################
         for idx, model in enumerate(self.model_type.initial_models):
 
-            model, x_train = self.train_predictive_model(model,
-                                                         self.retrain_model,
-                                                         self.cross_val_iters,
-                                                         self.cross_val_model,
-                                                         x_columns,
-                                                         x_train,
-                                                         y_train)
+            model = self.train_predictive_model(model,
+                                                list(x_columns.keys()),
+                                                self.df.loc[mask_train, list(x_columns.keys())],
+                                                self.df.loc[mask_train, y_train_names])
 
             clf = model.trained_model
 
@@ -346,9 +349,8 @@ class Model_Builder:
                 max_idx = min(len(self.df.index), (s + 1) * max_slice_size)
                 print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
 
-                df_valid_iter = self.df[mask_all].iloc[min_idx:max_idx]
+                df_valid_iter = self.df.loc[mask_all, list(x_columns.keys())].iloc[min_idx:max_idx]
                 x_valid_columns, x_all, x_mappings = self.get_vectors(df_valid_iter, self.x_fields, x_mappings)
-                x_all = fix_np_nan(x_all)
 
                 # print(x_validate)
                 calculate_probs = hasattr(clf, 'classes_') \
@@ -365,53 +367,58 @@ class Model_Builder:
 
             # Generate predictions for this predictive model, for all values. Add them to the DF so they can be
             #  used as predictor variables (e.g. "stacked" upon) later when the next predictive model is run.
-            for k, v in self.y_field.items():
-                # y_all = np.atleast_1d(y_all)
-                preds = y_mappings[k].inverse_transform(y_all)
-                print('INTERMEDIATE PREDICTIONS')
-                print("First 7: ", *preds[:10])
-                print("Last 7: ", *preds[-10:])
+            # y_all = np.atleast_1d(y_all)
+            preds = y_mappings[k].inverse_transform(y_all)
+            print('INTERMEDIATE PREDICTIONS')
+            print("First 7: ", *preds[:10])
+            print("Last 7: ", *preds[-10:])
 
-                new_x_fields = {}
-                if calculate_probs:
-                    prob_field_names = [k + '_' + model.model_class + '_prob_' + f.lower().replace(' ', '_') for f in
-                                        list(y_mappings[k].classes_)[:pred_probs.shape[1]]]
-                    prob_field_names = [get_unique_name(v, self.df.columns.values) for v in prob_field_names]
-                    df_pred = pd.DataFrame(data=pred_probs
-                                           , columns=prob_field_names
-                                           , index=df_valid_iter.index)
-                    df_pred = df_pred.loc[:, df_pred.columns.values[:-1]]
-                    for f in df_pred.columns.values:
-                        new_x_fields[f] = 'num'
-                    # self.df = self.df.join(df_preds, how='inner')
-                    print('Unique probabilities: ', len(np.unique(pred_probs)))
-                    print('Probability variance: ', np.var(pred_probs))
+            new_x_fields = {}
+            if calculate_probs:
+                pred_field_names = [k + '_' + model.model_class + '_prob_' + f.lower().replace(' ', '_') for f in
+                                    sorted(list(y_mappings[k].classes_))]  #[:pred_probs.shape[1]]]
+                pred_field_names = [get_unique_name(v, self.df.columns.values) for v in pred_field_names]
+                df_pred = pd.DataFrame(data=pred_probs
+                                       , columns=pred_field_names
+                                       , index=df_valid_iter.index)
+                df_pred = df_pred.loc[:, df_pred.columns.values[1:]]
+                for f in df_pred.columns.values:
+                    new_x_fields[f] = 'num'
+                # self.df = self.df.join(df_preds, how='inner')
+                print('Unique probabilities: ', len(np.unique(pred_probs)))
+                print('Probability variance: ', np.var(pred_probs))
 
-                else:
-                    pred_field_name = get_unique_name('{0}_pred_{1}'.format(k, model.model_class),
-                                                      self.df.columns.values)
-                    df_pred = pd.DataFrame(data=preds
-                                           , columns=[pred_field_name]
-                                           , index=df_valid_iter.index)
+            else:
+                pred_field_names = get_unique_name('{0}_pred_{1}'.format(k, model.model_class),
+                                                  self.df.columns.values)
+                df_pred = pd.DataFrame(data=preds
+                                       , columns=[pred_field_names]
+                                       , index=df_valid_iter.index)
 
-                    new_x_fields[pred_field_name] = 'cat' if not isinstance(v, str) else v
-                    print('Unique predictions: ', len(np.unique(preds)))
+                new_x_fields[pred_field_names] = 'cat' if not isinstance(v, str) else v
+                print('Unique predictions: ', len(np.unique(preds)))
 
-                self.df = self.df.join(df_pred, how='inner')
-                new_x_mappings = self.train_models(self.df[mask_train], new_x_fields)
+            update_df_outer(self.df, df_pred)
+            # self.df = self.df.join(df_pred, how='inner')
 
-                if self.stack_include_preds:
-                    self.x_fields.update(new_x_fields)
-                    self.df, x_train, self.x_fields, x_columns, x_mappings = \
-                        self.get_fields(self.df,
-                                        self.x_fields,
-                                        y_train,
-                                        mask_train,
-                                        self.selection_limit,
-                                        correlation_reduction=(self.correlation_method, self.correlation_max))
-                else:
-                    pred_x_fields.update(new_x_fields)
-                    pred_x_mappings.update(new_x_mappings)
+            new_x_mappings = self.train_models(self.df.loc[mask_train, list(new_x_fields.keys())], new_x_fields)
+            new_x_columns, new_x_column_df, new_x_mappings = \
+                self.get_vectors(self.df.loc[mask_train, new_x_fields], new_x_fields, new_x_mappings)
+
+            if self.stack_include_preds:
+
+                x_columns.update(new_x_columns)
+                update_df_outer(self.df, new_x_column_df)
+                x_mappings.update(new_x_mappings)
+                self.x_fields.update(new_x_fields)
+                x_columns = self.reduce_dimensions(x_columns, k, mask_train)
+
+            else:
+                # If the fields aren't going to be included during the stacking process, save them for later
+                #   (e.g. save them in a seperate object so we can include them later on in the final models)
+                pred_x_fields.update(new_x_fields)
+                pred_x_mappings.update(new_x_mappings)
+                pred_x_columns.update(new_x_columns)
 
             if hasattr(clf, 'intercept_') and (isinstance(clf.intercept_, (list)) and len(clf.intercept_) == 1):
                 print('--- Model over-normalization testing ---\n'
@@ -420,52 +427,55 @@ class Model_Builder:
                               , format(expit(clf.intercept_[0]), '.4f')
                               , format(exp(clf.intercept_[0])), '.4f'))
 
+        ##################################################
+        # FINAL MODEL TRAINING AND PREDICTION GENERATION #
+        ##################################################
         for idx, model in enumerate(self.model_type.final_models):
 
             if self.model_type.initial_models:
+
                 if self.final_include_data:
 
                     self.x_fields.update(pred_x_fields)
                     x_mappings.update(pred_x_mappings)
+                    x_columns.update(pred_x_columns)
 
                 else:
+
                     self.x_fields = pred_x_fields
+                    x_mappings = pred_x_mappings
+                    x_columns = pred_x_columns
 
-                    self.df, x_train, self.x_fields, x_columns, x_mappings = \
-                        self.get_fields(self.df,
-                                        self.x_fields,
-                                        y_train,
-                                        mask_train,
-                                        self.selection_limit,
-                                        correlation_reduction=(self.correlation_method, self.correlation_max))
+                x_columns = self.reduce_dimensions(x_columns, k, mask_train)
 
-            model, x_train = self.train_predictive_model(model,
-                                                         self.retrain_model,
-                                                         self.cross_val_iters,
-                                                         self.cross_val_model,
-                                                         x_columns,
-                                                         x_train,
-                                                         y_train.transpose())
+            model = self.train_predictive_model(model,
+                                                list(x_columns.keys()),
+                                                self.df.loc[mask_train, list(x_columns.keys())],
+                                                self.df.loc[mask_train, y_train_names])
 
             clf = model.trained_model
             # If PCA has been specified, convert x_fields to PCA
-            if self.pca_explained_var < 1:
-                self.df, x_columns = self.convert_to_pca(pca_df=self.df,
-                                                         field_names=list(x_columns.keys()),
-                                                         explained_variance=self.pca_explained_var)
+            # if self.pca_explained_var < 1:
+            #     self.df, x_columns = self.convert_to_pca(pca_df=self.df,
+            #                                              col_names=list(x_columns.keys()),
+            #                                              explained_variance=self.pca_explained_var)
 
             # INITIAL AND FINAL MODELS: SHOW MODEL TESTS
             if self.show_model_tests:
                 print("--------------------------\n"
                       "-- TEST SET APPLICATION --\n"
                       "--------------------------")
-                x_columns, x_test, x_mappings = self.get_vectors(self.df.loc[mask_test, :], self.x_fields, x_mappings)
-                _, y_test, y_mappings = self.get_vectors(self.df.loc[mask_test, :], self.y_field, y_mappings, is_y=True)
-                y_test = y_test.iloc[:, 0]
+                _, x_test_df, x_mappings = self.get_vectors(self.df.loc[mask_test, list(self.x_fields.keys())], self.x_fields, x_mappings)
+                _, y_test_df, y_mappings = self.get_vectors(self.df.loc[mask_test, list(self.y_field.keys())], self.y_field, y_mappings, is_y=True)
+                update_df_outer(self.df, x_test_df)
+                update_df_outer(self.df, y_test_df)
 
-                x_test = fix_np_nan(x_test)
-                if len(x_test.shape) == 1:
-                    x_test = x_test.reshape(-1, 1)
+                #################################################################
+                # ANDY ANDY ANDY ANDY THIS IS WHERE I LEFT OFF THE REWRITE
+                #################################################################
+
+                # if len(x_test.shape) == 1:
+                #     x_test = x_test.reshape(-1, 1)
 
                 print("Total Named Columns: ", len(x_columns))
 
@@ -493,10 +503,10 @@ class Model_Builder:
                     else:
                         raise ValueError('No coef_ or coefs_ attrubute in this model. Skipping.')
 
-                    if len(np.unique(y_test)) == 2:
-                        scores, p_vals = sk_feat_sel.f_classif(x_test, y_test)
+                    if len(np.unique(y_test_df)) == 2:
+                        scores, p_vals = sk_feat_sel.f_classif(x_test_df, y_test_df)
                     else:
-                        scores, p_vals = sk_feat_sel.f_regression(x_test, y_test, center=False)
+                        scores, p_vals = sk_feat_sel.f_regression(x_test_df, y_test_df, center=False)
 
                     nonzero_coefs_mask = [v != 0 for v in coefs]
                     significant_coefs_mask = [v <= self.selection_limit for v in p_vals]
@@ -540,10 +550,10 @@ class Model_Builder:
                     print(e)
                     pass
 
-                if len(np.unique(y_test)) == 2:
-                    scores, p_vals = sk_feat_sel.f_classif(x_test, y_test)
+                if len(np.unique(y_test_df)) == 2:
+                    scores, p_vals = sk_feat_sel.f_classif(x_test_df, y_test_df)
                 else:
-                    scores, p_vals = sk_feat_sel.f_regression(x_test, y_test, center=False)
+                    scores, p_vals = sk_feat_sel.f_regression(x_test_df, y_test_df, center=False)
 
                 value_mask_95 = [float(v) <= 0.05 for v in p_vals]
 
@@ -599,17 +609,17 @@ class Model_Builder:
                     print('INTERCEPT (EXP)')
                     print(*[exp(v) for v in intercept], sep='\n')
 
-                preds, x_test = self.resilient_predict(clf, x_test)
-                print('R2 SCORE\n', r2_score(y_test, preds))
+                preds, x_test_df = self.resilient_predict(clf, x_test_df.loc[:, list(x_columns.keys())])
+                print('R2 SCORE\n', r2_score(y_test_df, preds))
 
                 if hasattr(clf, 'classes_'):
                     print('CLASSES')
                     print(clf.classes_)
-                    print('ACCURACY:\n', metrics.accuracy_score(y_test, preds))
+                    print('ACCURACY:\n', metrics.accuracy_score(y_test_df, preds))
                     try:
-                        y_test_probs, x_test = self.resilient_predict_probs(clf, x_test)
+                        y_test_probs, x_test_df = self.resilient_predict_probs(clf, x_test_df)
                         if y_test_probs.shape[1] <= 2:
-                            print('ROC-CURVE AOC', metrics.roc_auc_score(y_test, y_test_probs[:, 1]))
+                            print('ROC-CURVE AOC', metrics.roc_auc_score(y_test_df, y_test_probs[:, 1]))
 
                         print("PREDICTION PROBABILITIES")
                         print(y_test_probs)
@@ -618,25 +628,25 @@ class Model_Builder:
                         pass
 
                     for k, v in self.y_field.items():
-                        preds_str = self.resilient_inverse_transform(y_mappings[k], preds)
-                        preds_names = list(set(preds_str))
+                        y_test_preds = self.resilient_inverse_transform(y_mappings[k], preds)
+                        # y_test_preds = y_test_preds.tolist()
 
-                        print("Unique integers in y_test:", list(set(y_test)))
-                        y_test_str = self.resilient_inverse_transform(y_mappings[k], y_test)
-                        y_test_names = list(set(y_test_str))
+                        print("Unique integers in y_test:", list(set(y_test_df)))
+                        y_test_actual = self.resilient_inverse_transform(y_mappings[k], y_test_df)
+                        y_test_actual = y_test_actual.T[0]
+                        # y_test_actual = np.ndarray([x[0] for x in y_test_actual.tolist()])
                         # Create confusion matrix
-                        conf_matrix = pd.crosstab(y_test_str, preds_str, rownames=['actual'],
-                                                  colnames=['predicted'])
+                        conf_matrix = pd.crosstab(y_test_actual, y_test_preds, rownames=['actual'], colnames=['predicted'])
                         print("CONFUSION MATRIX")
                         print(conf_matrix)
-                        conf_matrix.to_csv('%s/%s' % (data_file_dir, 'all_coefs.csv'), header=True, encoding='utf_8')
+                        conf_matrix.to_csv('%s/%s' % (data_file_dir, 'conf_matrix.csv'), header=True, encoding='utf_8')
                 pass
 
             print("--------------------------------\n"
                   "-- VALIDATION SET APPLICATION --\n"
                   "--------------------------------")
             # CREATE X_VALIDATE
-            df_validate = self.df.loc[mask_validate, :]
+            df_validate = self.df.loc[mask_validate, list(x_columns.keys())]
 
             # ITERATE OVER THE df_validate in groups of 100K rows (to avoid memory errors) and predict outcomes
             max_slice_size = 100000
@@ -647,10 +657,8 @@ class Model_Builder:
                 max_idx = min(len(df_validate.index), (s + 1) * max_slice_size)
                 print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
 
-                df_valid_iter = self.df[mask_validate].iloc[min_idx:max_idx]
-                x_valid_columns, x_validate, x_mappings = self.get_vectors(df_valid_iter, self.x_fields, x_mappings)
-
-                x_validate = fix_np_nan(x_validate)
+                df_valid_iter = self.df.loc[mask_validate, :].iloc[min_idx:max_idx]
+                _, x_validate, x_mappings = self.get_vectors(df_valid_iter, self.x_fields, x_mappings)
 
                 # print(x_validate)
                 # print("Prediciton Matrix Shape: {0}".format(x_validate.shape))
@@ -662,7 +670,7 @@ class Model_Builder:
                 #         preds.append(preds)
                 #         x_validate.append(x_validate_row)
                 # else:
-                preds, x_validate = self.resilient_predict(clf, x_validate)
+                preds, x_validate = self.resilient_predict(clf, x_validate.loc[:, list(x_columns.keys())])
 
                 calculate_probs = hasattr(clf, 'classes_') \
                                   and hasattr(clf, 'predict_proba') \
@@ -674,7 +682,7 @@ class Model_Builder:
                 y_validate.append(preds)
 
             # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
-            y_validate = np.hstack(y_validate).reshape(-1, 1)
+            y_validate = np.hstack(y_validate).reshape(-1, 1).astype(int)
 
             self.new_fields = list()
             if calculate_probs:
@@ -722,72 +730,62 @@ class Model_Builder:
             pickle.dump((x_mappings, y_mappings), pickle_file)
 
     def get_fields(self,
-                   df: Union[pd.DataFrame, pd.SparseDataFrame],
-                   fields: Union[OrderedDict, dict],
-                   y: Union[pd.DataFrame, pd.SparseDataFrame, pd.Series, pd.SparseSeries],
-                   mask: Union[list, np.ndarray, tuple],
-                   selection_limit: float,
-                   correlation_reduction: tuple):
+                   y_column_names: list,
+                   mask: Union[list, np.ndarray, tuple]
+                   ) -> (OrderedDict, OrderedDict):
 
-        mappings = self.train_models(df.loc[mask, :], fields)
-        columns, x, mappings = self.get_vectors(df.loc[mask, :], fields, mappings)
-        x = fix_np_nan(x)
-        update_df_outer(df, x)
+        field_names = list(self.x_fields.keys())
+        mappings = self.train_models(self.df.loc[mask, field_names], self.x_fields)
+        x_columns, x, mappings = self.get_vectors(self.df.loc[mask, field_names], self.x_fields, mappings)
+        update_df_outer(self.df, x)
 
+        x_columns = self.reduce_dimensions(x_columns, y_column_names, mask)
+
+        return x_columns, mappings
+
+    def reduce_dimensions(self, x_columns: dict, y_column_names: list, mask: np.ndarray) -> dict:
         #####################################################
         # Remove Highly Correlated Variables (If Specified) #
         #####################################################
-        if correlation_reduction:
-            method, limit = correlation_reduction
-            if 0 < limit < 1:
-                if method == 'corr':
-                    col_names = reduce_variance_corr(df=df.loc[mask, :], columns=list(columns.keys()),
-                                                     max_corr_val=limit, y=y)
-
-                    for f in columns.keys().copy():
-                        if f not in col_names:
-                            print('Column [{0}] removed to reduce variance.'.format(f))
-                            columns.pop(f)
-                    remaining_fields = set(list(columns.values()))
-                    for f in fields.keys().copy():
-                        if f not in remaining_fields:
-                            print('Field [{0}] removed to reduce variance.'.format(f))
-                            fields.pop(f)
-
-                elif method == 'pca':
-                    df, col_names = reduce_variance_pca(df=df, field_names=list(columns.keys()), explained_variance=limit,
-                                                      mask=mask)
+        if 0 < self.correlation_max < 1:
+                if self.correlation_method == 'corr':
+                    reduced_x_column_names = reduce_variance_corr(df=self.df.loc[mask, :],
+                                                                  x_column_names=list(x_columns.keys()),
+                                                                  y_column_names=y_column_names,
+                                                                  max_corr_val=self.correlation_max
+                                                                  )
+                    [x_columns.pop(key) for key in x_columns.keys() if key not in reduced_x_column_names]
+                elif self.correlation_method == 'pca':
+                    pca_df, reduced_x_column_names = reduce_variance_pca(df=self.df.loc[mask, :],
+                                                                         column_names=list(x_columns.keys()),
+                                                                         explained_variance=self.correlation_max
+                                                                         )
+                    x_columns = {k: None for k in reduced_x_column_names}
                 else:
                     raise ValueError('Incorrect variance reduction method provided! [{0}]'.format(method))
 
-                print('X Names Length: {0}'.format(len(fields)))
+                print('X Names Length: {0}'.format(len(list(x_columns.keys()))))
 
         ###################################################
         # Remove Non-Significant Variables (If Specified) #
         ###################################################
-        if selection_limit < 1.0:
-            col_names = list(columns.keys())
-            print('Pruning x_fields for any variables with a p-value > {0}'.format(selection_limit))
-            if len(np.unique(y)) <= 1:
+        if self.selection_limit < 1.0:
+            x_column_names = list(x_columns.keys())
+            print('Pruning x_fields for any variables with a p-value > {0}'.format(self.selection_limit))
+            if len(np.unique(self.df.loc[mask, y_column_names])) <= 1:
                 raise ValueError('Not enough unique values in the target variable. Can\'t build model. Check your sh1t')
-            elif len(np.unique(y)) == 2:
-                scores, p_vals = sk_feat_sel.f_classif(df.loc[mask, col_names].values, y.values)
+            elif len(np.unique(self.df.loc[mask, y_column_names])) == 2:
+                scores, p_vals = sk_feat_sel.f_classif(self.df.loc[mask, x_column_names], self.df.loc[mask, y_column_names])
             else:
-                scores, p_vals = sk_feat_sel.f_regression(df.loc[mask, col_names].values, y.values)
+                scores, p_vals = sk_feat_sel.f_regression(self.df.loc[mask, x_column_names], self.df.loc[mask, y_column_names])
 
-            for idx, f in reverse_enumerate(col_names):
-                if p_vals[idx] > selection_limit:
-                    print('Column "{0}" not statistically significant ({1:.4f} > {2:.4f}). Removing.'
-                          .format(f, p_vals[idx], selection_limit))
-                    columns.pop(f)
+            # remaining_fields = set()
+            for idx, col_name in reverse_enumerate(x_column_names):
+                if p_vals[idx] > self.selection_limit:
+                    x_columns.pop(col_name)
+                    print('Column [{0}] not found to be statistically significant. Removing.'.format(col_name))
 
-            remaining_fields = set(list(columns.values()))
-            for f in fields.keys().copy():
-                if f not in remaining_fields:
-                    print('Field [{0}] not found to be statistically significant. Removing.'.format(f))
-                    fields.pop(f)
-
-        return df, x, fields, columns, mappings
+        return x_columns
 
     def get_vectors(self,
                     df: pd.DataFrame,
@@ -810,7 +808,7 @@ class Model_Builder:
                 # null_arr = df[f].isnull().astype(np.float64)
                 # if len(np.unique(null_arr)) >= 2:  # un-comment to skip useless null fields. Will break the code...
                 df[null_field_name] = df[f].isnull().astype(np.float64)
-                column_names[null_field_name] = f
+                column_names[null_field_name] = {'use': True, 'orig_name': f}
 
             # print(trained_models[f])
             if isinstance(trained_models[f], sk_prep.LabelEncoder):
@@ -820,7 +818,7 @@ class Model_Builder:
                         print('None values (MUST BE ZERO!): ', sum([x is None or x == np.NaN for x in df_vals]))
 
                         df[transformed_field_name] = pd.Series(data=trained_models[f].transform(df_vals), index=df_vals.index)
-                        column_names[transformed_field_name] = f
+                        column_names[transformed_field_name] = {'use': True, 'orig_name': f}
 
                         break
                     except (ValueError, AttributeError) as e:
@@ -853,7 +851,7 @@ class Model_Builder:
                 for col_index, col_name in trained_models[f].get_feature_names():
                     transformed_field_name = f + '_' + col_name
                     df.loc[:, transformed_field_name] = matrix[:, col_index].astype(np.float64)
-                    column_names[transformed_field_name] = f
+                    column_names[transformed_field_name] = {'use': True, 'orig_name': f}
 
             else:
                 if t == 'doc':
@@ -862,7 +860,7 @@ class Model_Builder:
                         matrix = matrix.toarray()
                     for col_index, col_name in enumerate(trained_models[f].get_feature_names()):
                         adj_col_name = f + '_' + col_name.encode('ascii', errors='ignore').decode('utf-8', errors='ignore')
-                        column_names[adj_col_name] = f
+                        column_names[adj_col_name] = {'use': True, 'orig_name': f}
                         df[adj_col_name] = matrix[:, col_index].astype(np.float64)
                 # else:
                 elif t == 'num':
@@ -880,7 +878,7 @@ class Model_Builder:
                         df[transformed_field_name] = df[transformed_field_name].astype(np.float64)
                         if isinstance(trained_models[f], sk_prep.MinMaxScaler):
                             df[transformed_field_name] = np.minimum(1, np.maximum(0, fix_np_nan(df[transformed_field_name])))
-                        column_names[transformed_field_name] = f
+                        column_names[transformed_field_name] = {'use': True, 'orig_name': f}
 
                 else:
                     raise ValueError('Type provided [(0}] for field [{1}] is not supported.'.format(t, f))
@@ -889,6 +887,7 @@ class Model_Builder:
                 print(' || Shape: {0}'.format(df.shape))
 
         df.drop(list(field_names.keys()), inplace=True, axis=1)
+        df = fix_np_nan(df)
         return column_names, df, trained_models
 
     def convert_to_pca(self,
@@ -910,15 +909,12 @@ class Model_Builder:
             sum_variance += var
             pca_name = 'pca_{0}'.format(idx)
             pca_df[pca_name] = x_results[idx]
-            x_names_pca[pca_name] = None
+            x_names_pca[pca_name] = {'use': True, 'orig_name': None}
             if sum_variance > explained_variance:
                 break
         return pca_df, x_names_pca
 
-    def resilient_fit(self, obj,
-                      x: Union[pd.DataFrame, pd.SparseDataFrame],
-                      y: Union[pd.Series, pd.SparseSeries]) \
-            -> (object, object):
+    def resilient_fit(self, obj, x: np.ndarray, y: np.ndarray) -> (GridSearchCV):
         try:
             # y = y.values.reshape(-1, 1)
             obj.fit(x, y)
@@ -944,9 +940,9 @@ class Model_Builder:
             else:
                 raise
 
-        return obj, x
+        return obj
 
-    def resilient_predict(self, obj, x) -> (object, object):
+    def resilient_predict(self, obj, x: np.ndarray) -> (np.ndarray, np.ndarray):
         try:
             preds = obj.predict(x)
         except (TypeError, ValueError, DeprecationWarning) as e:
@@ -973,7 +969,7 @@ class Model_Builder:
 
         return preds, x
 
-    def resilient_predict_probs(self, obj, x) -> (object, object):
+    def resilient_predict_probs(self, obj, x: np.ndarray) -> (np.ndarray, np.ndarray):
         try:
             preds = obj.predict_proba(x)
         except (TypeError, ValueError, DeprecationWarning) as e:
@@ -1000,9 +996,9 @@ class Model_Builder:
 
         return preds, x
 
-    def resilient_inverse_transform(self, model: sk_prep.LabelEncoder, preds: np.ndarray):
+    def resilient_inverse_transform(self, model: sk_prep.LabelEncoder, preds: np.ndarray) -> np.ndarray:
         try:
-            preds_str = model.inverse_transform(preds)
+            preds_str = model.inverse_transform(preds.astype(int))
         except TypeError as e:  # This will handle a bug with using a Numpy ndarray as an index. FUCKING HELL.
             print(e)
             preds = preds.tolist()
@@ -1012,9 +1008,6 @@ class Model_Builder:
 
     def train_predictive_model(self,
                                model: Model,
-                               retrain_model: bool,
-                               cross_val_iters: Union[tuple, list],
-                               cross_val_model,
                                x_columns: list,
                                x_train: Union[pd.DataFrame, pd.SparseDataFrame],
                                y_train: Union[pd.DataFrame, pd.SparseDataFrame]):
@@ -1266,41 +1259,42 @@ class Model_Builder:
 
             # METRICS
             if 'metric' in clf.get_params().keys():
-                if isinstance(clf, (NearestCentroid)):
+                if isinstance(clf, NearestCentroid):
                     grid_param_dict['metric'] = ['euclidean', 'manhattan']
                 elif isinstance(clf, (KNeighborsRegressor, KNeighborsClassifier)):
                     grid_param_dict['metric'] = ['euclidean', 'manhattan', 'minkowski', 'chebyshev']
-                    # NOTE: wminkowski doesn't seem to work in here. Might be a bug in sklearn 0.19.
-                    # NOTE: I deliberately left out seuclidean and mahalanobis because they were too much trouble.
+                    # NOTE: minkowski doesn't seem to work in here. Might be a bug in sklearn 0.19.
+                    # NOTE: I deliberately left out mahalanobis because it was too much trouble.
                 else:
                     print('Unspecified parameter "metric" for ', type(clf))
 
             while True:
                 try:
                     # grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, n_jobs=-1)
-                    if not cross_val_model:
+                    if not self.cross_val_model:
                         if hasattr(clf, 'classes_'):
-                            cross_val_model = RepeatedStratifiedKFold(n_splits=cross_val_iters[0],
-                                                                      n_repeats=cross_val_iters[1],
+                            self.cross_val_model = RepeatedStratifiedKFold(n_splits=self.cross_val_iters[0],
+                                                                      n_repeats=self.cross_val_iters[1],
                                                                       random_state=555)
                         else:
-                            cross_val_model = RepeatedKFold(n_splits=cross_val_iters[0],
-                                                            n_repeats=cross_val_iters[1],
+                            self.cross_val_model = RepeatedKFold(n_splits=self.cross_val_iters[0],
+                                                            n_repeats=self.cross_val_iters[1],
                                                             random_state=555)
 
                     if 'windows' in platform.system().lower():  # or isinstance(clf,(MLPClassifier, MLPRegressor)):
-                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=cross_val_model)
+                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=self.cross_val_model)
                     else:
-                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=cross_val_model, n_jobs=-1)
+                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=self.cross_val_model,
+                                            n_jobs=-1)
 
-                    if retrain_model and \
+                    if self.retrain_model and \
                             (model.trained_model is not None) and \
                             (np.testing.assert_equal(model.grid_param_dict, grid_param_dict) is None) and \
                             (model.x_columns == x_columns):
                         clf = model.trained_model
                     else:
 
-                        grid, x_train = self.resilient_fit(grid, x_train, y_train)
+                        grid = self.resilient_fit(grid, x_train, y_train)
 
                         print(grid)
                         # summarize the results of the grid search
@@ -1328,19 +1322,19 @@ class Model_Builder:
                     else:
                         raise e
         else:
-            if retrain_model and \
+            if self.retrain_model and \
                     (model.trained_model is not None) and \
                     (model.x_columns == x_columns) and \
                     (clf.get_params() == model.trained_model.get_params()):
                 clf = model.trained_model
             else:
-                clf, x_train = self.resilient_fit(clf, x_train, y_train)
+                clf = self.resilient_fit(clf, x_train, y_train)
                 model.trained_model = clf
                 model.x_columns = x_columns
 
         print("------ Model Training Complete [{0}] ------\n".format(model.model_class))
 
-        return model, x_train
+        return model
 
     def train_models(self,
                      df: pd.DataFrame,
@@ -1476,14 +1470,12 @@ def get_decimals(vals: np.ndarray):
     return max_decimals
 
 
-def reduce_variance_corr(df: pd.DataFrame,
-                         columns: list,
-                         max_corr_val: float,
-                         y: Union[list, pd.Series, pd.SparseSeries, np.ndarray]
-                         ) -> list:
+def reduce_variance_corr(df: pd.DataFrame, x_column_names: list, y_column_names: list, max_corr_val: float)\
+        -> list:
     print('Removing one variable for each pair of variables with correlation greater than [{0}]'.format(max_corr_val))
     # Creates Correlation Matrix and Instantiates
-    corr_matrix = df[columns].astype(float).corr(method='pearson')
+    corr_matrix = df.loc[:, x_column_names].astype(float).corr(method='pearson')
+    # corr_matrix = df.loc[:, x_column_names].astype(float).corr()
     # for v in fields:
     # print('Field [{0}] Length: {1}'.format(v, len(df[v].unique())))
     # if len(df[v].unique()) <= 10:
@@ -1494,17 +1486,17 @@ def reduce_variance_corr(df: pd.DataFrame,
 
     # Determine the p-values of the dataset and when a field must be dropped, prefer the field with the higher p-value
     if len(np.unique(y)) == 2:
-        scores, p_vals = sk_feat_sel.f_classif(df[columns], y)
+        scores, p_vals = sk_feat_sel.f_classif(df.loc[:, x_column_names], df.loc[:,y_column_names])
     else:
-        scores, p_vals = sk_feat_sel.f_regression(df[columns], y)
+        scores, p_vals = sk_feat_sel.f_regression(df.loc[:, x_column_names], df.loc[:,y_column_names])
 
     # Iterates through Correlation Matrix Table to find correlated columns
-    for i, v in enumerate(columns[:-1]):
+    for i, v in enumerate(x_column_names[:-1]):
         i2, c = sorted([(i2 + 1, v2) for i2, v2 in enumerate(corr_matrix.iloc[i, i + 1:])], key=lambda tup: tup[1])[-1]
 
         if c > max_corr_val:
             if p_vals[i] <= p_vals[i2]:
-                drop_cols.add(columns[i2])
+                drop_cols.add(x_column_names[i2])
             else:
                 drop_cols.add(v)
 
@@ -1522,42 +1514,39 @@ def reduce_variance_corr(df: pd.DataFrame,
     #     if max_corr >= max_corr_val:
     #         drop_cols.add(v)
 
-    return_x_vals = [v for v in columns if v not in list(drop_cols)]
+    x_column_names = [v for v in x_column_names if v not in list(drop_cols)]
     print('=== Drop of Highly-Correlated Variables is Complete ===')
     print('Dropped Fields [{0}]: {1}'.format(len(drop_cols), list(drop_cols)))
-    print('Remaining Fields [{0}]: {1}'.format(len(return_x_vals), return_x_vals))
-    return return_x_vals
+    print('Remaining Fields [{0}]: {1}'.format(len(x_column_names), x_column_names))
+    return x_column_names
 
 
-def reduce_variance_pca(df: pd.DataFrame, field_names: list, explained_variance: float, mask: list = None):
+def reduce_variance_pca(df: pd.DataFrame, column_names: list, explained_variance: float):
     print("Conducting PCA and pruning components above the desired explained variance ratio")
-    max_components = len(field_names) - 1
+    max_components = len(column_names) - 1
     if explained_variance <= 0:
         explained_variance = 0.99
 
     pca_model = TruncatedSVD(n_components=max_components, random_state=555)
-    if mask:
-        pca_model.fit(df.loc[:, field_names])
-    else:
-        pca_model.fit(df.loc[mask, field_names])
+    pca_model.fit(df.loc[:, column_names])
 
-    x_results = pca_model.transform(df.loc[:, field_names]).T
+    initial_pca_columns = pca_model.transform(df.loc[:, column_names]).T
 
     # print(pca_model.components_)
     print('PCA explained variance ratios.')
     print(pca_model.explained_variance_ratio_)
 
-    x_names_pca = []
+    final_pca_columns = []
     sum_variance = 0.
     for idx, var in enumerate(pca_model.explained_variance_ratio_):
         sum_variance += var
-        pca_name = 'pca_{0}'.format(idx)
-        df[pca_name] = x_results[idx]
-        x_names_pca.append(pca_name)
+        pca_column_name = 'pca_{0}'.format(idx)
+        df[pca_column_name] = initial_pca_columns[idx]
+        final_pca_columns += [pca_column_name]
         if sum_variance > explained_variance:
             break
 
     print('Explained variance retained: {0:.2f}'.format(sum_variance))
-    print('Number of PCA Fields: {0}'.format(len(x_names_pca)))
-    print('PCA Fields: {0}'.format(x_names_pca))
-    return df, x_names_pca
+    print('Number of PCA Fields: {0}'.format(len(final_pca_columns)))
+    print('PCA Fields: {0}'.format(final_pca_columns))
+    return df, final_pca_columns
