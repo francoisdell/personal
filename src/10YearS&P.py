@@ -198,14 +198,13 @@ def predict_returns(df: pd.DataFrame,
         forward_y_field_name = y_field_name
         df[forward_y_field_name] = df[y_field_name]
 
-    train_mask = ~df[forward_y_field_name].isnull()
-
     for v in x_names:
         if not np.isfinite(df[v].astype(float)).all() or not np.isfinite(df[v].astype(float).sum()):
             print('Found Series with non-finite values:{0}'.format(v))
             print(*df[v].values, sep='\n')
             raise Exception("Can't proceed until you fix the Series.")
 
+    train_mask = ~df[forward_y_field_name].isnull()
     #################################
     # USING THE MODEL BUILDER CLASS #
     #################################
@@ -235,6 +234,7 @@ def predict_returns(df: pd.DataFrame,
 
     for df, final_model_name in m.predict():
 
+        # df.set_index(train_mask.index, inplace=True, verify_integrity=True)
         forward_y_field_name_pred = 'pred_' + forward_y_field_name
         #################################
 
@@ -683,12 +683,13 @@ def impute_if_any_nulls(impute_df: pd.DataFrame, imputer: str='knnimpute'):
             impute_df = solver.complete(impute_df.values)
         except (ImportError, ValueError) as e:
             imputer = importlib.import_module("knnimpute")
-            impute_df = imputer.knn_impute_few_observed(impute_df.values, missing_mask=impute_df.isnull().values, k=5, verbose=verbose)
+            impute_df = imputer.knn_impute_few_observed(impute_df.astype(float).values,
+                                                        missing_mask=impute_df.isnull().values,
+                                                        k=5,
+                                                        verbose=verbose)
         # df = solver.complete(df.values)
 
-    impute_df = pd.DataFrame(data=impute_df, columns=impute_names,
-                             index=impute_index
-                             )
+    impute_df = pd.DataFrame(data=impute_df, columns=impute_names, index=impute_index)
     for n in impute_names.copy():
         if impute_df[n].isnull().any().any():
             print('Field [{0}] was still empty after imputation! Removing it!'.format(n))
@@ -1239,6 +1240,7 @@ if __name__ == '__main__':
     do_predict_returns = True
     do_predict_recessions = False
     do_predict_next_recession_method = None  # None/False, 'SARIMAX', or 'STACKING'
+    use_fast_models = True
 
     returns_predict_quarters_forward = [32]
     recession_predict_quarters_forward = [6]
@@ -1285,53 +1287,65 @@ if __name__ == '__main__':
 
     # SET THE MODELS FOR THE NEXT-RECESSION PREDICTION METHOD
     if do_predict_next_recession_method:
-        initial_models = ['linreg', 'rfor_r', 'svr', 'gbr', 'knn_r', 'elastic_net', 'pass_agg_r']
-        if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
-            initial_models.extend(['gauss_proc_r'])
-            if use_neural_nets:
-                initial_models.extend(['neural_r_2'])
+        if use_fast_models:
+            initial_models = ['rfor_r']
+            final_models = ['linreg']
+        else:
+            initial_models = ['linreg', 'rfor_r', 'svr', 'gbr', 'knn_r', 'elastic_net', 'pass_agg_r']
+            if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
+                initial_models.extend(['gauss_proc_r'])
+                if use_neural_nets:
+                    initial_models.extend(['neural_r_2'])
 
-        final_models = ['linreg', 'gauss_proc_r', 'elastic_net', 'svr', 'elastic_net_stacking']
-        if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
-            final_models.extend(['gauss_proc_r'])
-            if use_neural_nets:
-                final_models.extend(['neural_r'])
+            final_models = ['linreg', 'gauss_proc_r', 'elastic_net', 'svr', 'elastic_net_stacking']
+            if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
+                final_models.extend(['gauss_proc_r'])
+                if use_neural_nets:
+                    final_models.extend(['neural_r'])
 
         next_recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
     # SET THE MODELS FOR THE RECESSION PREDICTION METHOD
     if do_predict_recessions:
-        initial_models = ['logit', 'etree_c', 'nearest_centroid', 'gbc', 'bernoulli_nb', 'svc', 'rfor_c']  # pass_agg_c
-        # initial_models=['logit','etree_c']
-        if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
-            initial_models.extend(['gauss_proc_c'])
-            if use_neural_nets:
-                initial_models.extend(['neural_c_2'])
+        if use_fast_models:
+            initial_models = ['rfor_c']
+            final_models = ['logit']
+        else:
+            initial_models = ['logit', 'etree_c', 'nearest_centroid', 'gbc', 'bernoulli_nb', 'svc', 'rfor_c']  # pass_agg_c
+            # initial_models=['logit','etree_c']
+            if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
+                initial_models.extend(['gauss_proc_c'])
+                if use_neural_nets:
+                    initial_models.extend(['neural_c_2'])
 
-        # BEST MODELS: logit, svc, sgd_c, neural_c, gauss_proc_c
-        # Overall best model: svc???
-        final_models = ['logit', 'svc']
-        if (not final_include_data) or max_correlation < 1. or max_variables == 0:
-            final_models.extend(['gauss_proc_c'])
-            if use_neural_nets:
-                final_models.extend(['neural_c'])
+            # BEST MODELS: logit, svc, sgd_c, neural_c, gauss_proc_c
+            # Overall best model: svc???
+            final_models = ['logit', 'svc']
+            if (not final_include_data) or max_correlation < 1. or max_variables == 0:
+                final_models.extend(['gauss_proc_c'])
+                if use_neural_nets:
+                    final_models.extend(['neural_c'])
 
         # initial_models=['logit','etree_c','nearest_centroid','gbc','bernoulli_nb','svc','pass_agg_c','gauss_proc_c']
         recession_models = ModelSet(final_models=final_models, initial_models=initial_models)
 
     # SET THE MODELS FOR THE RETURNS PREDICTION METHOD
     if do_predict_returns:
-        initial_models = ['rfor_r', 'gbr', 'linreg', 'elastic_net', 'knn_r', 'svr']
-        if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
-            initial_models.extend(['gauss_proc_r'])
-            if use_neural_nets:
-                initial_models.extend(['neural_r_2'])
+        if use_fast_models:
+            initial_models = ['rfor_r']
+            final_models = ['linreg']
+        else:
+            initial_models = ['rfor_r', 'gbr', 'linreg', 'elastic_net', 'knn_r', 'svr']
+            if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
+                initial_models.extend(['gauss_proc_r'])
+                if use_neural_nets:
+                    initial_models.extend(['neural_r_2'])
 
-        final_models = ['elastic_net_stacking', 'linreg', 'svr', 'svr']
-        if (not final_include_data) or (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
-            final_models.extend(['gauss_proc_r'])
-            if use_neural_nets:
-                final_models.extend(['neural_r'])
+            final_models = ['elastic_net_stacking', 'linreg', 'svr', 'svr']
+            if (not final_include_data) or (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
+                final_models.extend(['gauss_proc_r'])
+                if use_neural_nets:
+                    final_models.extend(['neural_r'])
 
         returns_models = ModelSet(final_models=final_models, initial_models=initial_models)
 

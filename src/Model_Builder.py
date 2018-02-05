@@ -152,11 +152,14 @@ class Model_Builder:
                  ):
 
 
-        df_idx_u = df.index.unique()
-        print(len(df_idx_u))
-        print(df[df.index.duplicated()])
-        if len(df.index.duplicated()) > 0:
-            df.reset_index(drop=True,inplace=True)
+        # df_idx_u = df.index.unique()
+        # print(len(df_idx_u))
+        # print(df[df.index.duplicated()])
+        if df.index.duplicated().any():
+            # lol = df.index.duplicated()
+            # derp = df.index.values
+            # print(*df.index.duplicated(), sep='\n')
+            df.reset_index(drop=True, inplace=True)
 
         self.df = df
         self.x_fields = x_fields
@@ -184,7 +187,7 @@ class Model_Builder:
         self.correlation_max = correlation_max
         self.codify_nulls = codify_nulls
 
-    def predict(self) -> pd.DataFrame:
+    def predict(self) -> (pd.DataFrame, str):
 
         s = Settings(report_name=self.report_name)
         data_file_dir = s.get_report_data_dir()
@@ -645,20 +648,21 @@ class Model_Builder:
                   "-- VALIDATION SET APPLICATION --\n"
                   "--------------------------------")
             # CREATE X_VALIDATE
-            df_validate = self.df.loc[mask_validate, list(x_columns.keys())]
+            df_validate = self.df.loc[mask_validate, :]
 
             # ITERATE OVER THE df_validate in groups of 100K rows (to avoid memory errors) and predict outcomes
             max_slice_size = 100000
-            y_validate = list()
-            y_validate_probs = list()
+            y_validate = pd.DataFrame()
+            y_validate_probs = pd.DataFrame()
+            # y_pred_name = 'pred_' + k
             for s in range(0, int(math.ceil(len(df_validate.index) / max_slice_size))):
                 min_idx = s * max_slice_size
                 max_idx = min(len(df_validate.index), (s + 1) * max_slice_size)
                 print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
 
-                df_valid_iter = self.df.loc[mask_validate, :].iloc[min_idx:max_idx]
+                df_valid_iter = df_validate.iloc[min_idx:max_idx]
                 _, x_validate, x_mappings = self.get_vectors(df_valid_iter, self.x_fields, x_mappings)
-                update_df_outer(self.df, x_validate)
+                # update_df_outer(self.df, x_validate)
 
                 # print(x_validate)
                 # print("Prediciton Matrix Shape: {0}".format(x_validate.shape))
@@ -670,33 +674,36 @@ class Model_Builder:
                 #         preds.append(preds)
                 #         x_validate.append(x_validate_row)
                 # else:
-                preds, x_validate = self.resilient_predict(clf, x_validate.loc[:, list(x_columns.keys())])
+                preds, _ = self.resilient_predict(clf, x_validate.loc[:, list(x_columns.keys())])
+                y_validate = y_validate.append(preds, verify_integrity=True)
+                # update_df_outer(y_validate, preds)
+                # update_df_outer(self.df, preds)
 
                 calculate_probs = hasattr(clf, 'classes_') \
                                   and hasattr(clf, 'predict_proba') \
                                   and not (hasattr(clf, 'loss') and clf.loss == 'hinge')
                 if calculate_probs:
-                    pred_probs, x_validate = self.resilient_predict_probs(clf, x_validate.loc[:, list(x_columns.keys())])
-                    y_validate_probs.append(pred_probs)
+                    pred_probs, _ = self.resilient_predict_probs(clf, x_validate.loc[:, list(x_columns.keys())])
+                    y_validate_probs = y_validate_probs.append(pred_probs, verify_integrity=True)
+                    # update_df_outer(y_validate_probs, pred_probs)
+                    # update_df_outer(self.df, pred_probs)
 
-                y_validate.append(preds)
 
             # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
-            y_validate = np.hstack(y_validate).reshape(-1, 1).astype(int)
+            # y_validate = np.hstack(y_validate).reshape(-1, 1).astype(int)
 
             self.new_fields = list()
             if calculate_probs:
-                y_validate_probs = np.vstack(y_validate_probs)
                 print('ORIGINAL PROBABILITIES')
                 print(*y_validate_probs[:10].round(4), sep='\n')
                 print('ORIGINAL PROBABILITIES (NORMALIZED)')
                 print(*[np.around(np.expm1(x), 4) for x in y_validate_probs][:10], sep='\n')
 
                 for y_name, mapping in y_mappings.items():
-                    df_probs = pd.DataFrame(data=y_validate_probs.round(4)
-                                            , columns=[y_name + '_prob_' + f.lower().replace(' ', '_') for f in
-                                                       list(mapping.classes_)[:y_validate_probs.shape[1]]]
-                                            , index=df_validate.index)
+                    df_probs = pd.DataFrame(data=y_validate_probs.round(4),
+                                            columns=[y_name + '_prob_' + f.lower().replace(' ', '_') for f in
+                                                     list(mapping.classes_)[:y_validate_probs.shape[1]]],
+                                            index=df_validate.index)
 
                     for name in df_probs.columns.values:
                         if name in df_validate.columns.values:
@@ -705,20 +712,22 @@ class Model_Builder:
                 self.new_fields.extend(df_probs.columns.values.tolist())
 
             for k, v in self.y_field.items():
-                final_preds = y_mappings[k].inverse_transform(y_validate)
+                final_preds = y_mappings[k].inverse_transform(y_validate.astype(float))
                 print('FINAL PREDICTIONS')
                 print('First 7: ', *final_preds[:10])
                 print('Last 7: ', *final_preds[-10:])
                 y_pred_name = 'pred_' + k
                 df_validate.loc[:, y_pred_name] = final_preds
                 self.new_fields.extend([y_pred_name])
+                # update_df_outer(self.df, df_validate)
 
-            if self.predict_all:
-                return_df = df_validate
-            else:
-                return_df = self.df.loc[mask_validate == 0, :].append(df_validate, ignore_index=True)
+            # if self.predict_all:
+            #     return_df = df_validate
+            # else:
+            #     return_df = self.df.loc[mask_validate == 0, :].append(df_validate, ignore_index=True)
 
-            yield return_df, model.model_class
+            update_df_outer(self.df, df_validate)
+            yield self.df, model.model_class
 
         # INITIAL AND FINAL MODELS: TRAIN ANY UNTRAINED MODELS
         if self.verbose:
@@ -896,6 +905,7 @@ class Model_Builder:
                        col_names: list,
                        explained_variance: float
                        ) -> (Union[pd.DataFrame, pd.SparseDataFrame], Union[dict, OrderedDict]):
+
         print("Conducting PCA and pruning components above the desired explained variance ratio")
         max_components = len(col_names) - 1
         pca_model = TruncatedSVD(n_components=max_components, random_state=555)
@@ -915,7 +925,11 @@ class Model_Builder:
                 break
         return pca_df, x_names_pca
 
-    def resilient_fit(self, obj, x: np.ndarray, y: np.ndarray) -> (GridSearchCV):
+    def resilient_fit(self,
+                      obj,
+                      x: Union[pd.DataFrame, pd.SparseDataFrame],
+                      y: Union[pd.Series, pd.SparseSeries]) \
+            -> (GridSearchCV):
         try:
             # y = y.values.reshape(-1, 1)
             obj.fit(x, y)
@@ -923,10 +937,10 @@ class Model_Builder:
             if 'Expected 2D' in str(e) and len(x.shape) == 1:
                 # print(e)
                 print('=== 1D Array Error Caught. Reshaping array to overcome the error. ===')
-                x = x.values.reshape(-1, 1)
+                x = x.reshape(-1, 1)
                 return self.resilient_fit(obj, x, y)
             elif "dense" in str(e) and sparse.issparse(x):
-                x = x.values.toarray()
+                x = x.to_dense()
                 self.use_sparse = False
                 return self.resilient_fit(obj, x, y)
             elif hasattr(obj, 'n_jobs') and obj.n_jobs != 1:
@@ -943,7 +957,10 @@ class Model_Builder:
 
         return obj
 
-    def resilient_predict(self, obj, x: np.ndarray) -> (np.ndarray, np.ndarray):
+    def resilient_predict(self,
+                          obj,
+                          x: pd.DataFrame) \
+            -> (pd.DataFrame, pd.DataFrame):
         try:
             preds = obj.predict(x)
         except (TypeError, ValueError, DeprecationWarning) as e:
@@ -953,7 +970,7 @@ class Model_Builder:
                 x = x.reshape(-1, 1)
                 return self.resilient_predict(obj, x)
             elif "dense" in str(e) and sparse.issparse(x):
-                x = x.toarray()
+                x = x.to_dense()
                 self.use_sparse = False
                 return self.resilient_predict(obj, x)
             elif hasattr(obj, 'n_jobs') and obj.n_jobs != 1:
@@ -968,9 +985,12 @@ class Model_Builder:
             else:
                 raise
 
-        return preds, x
+        return pd.DataFrame(data=preds, index=x.index), x
 
-    def resilient_predict_probs(self, obj, x: np.ndarray) -> (np.ndarray, np.ndarray):
+    def resilient_predict_probs(self,
+                                obj,
+                                x: pd.DataFrame) \
+            -> (pd.DataFrame, pd.DataFrame):
         try:
             preds = obj.predict_proba(x)
         except (TypeError, ValueError, DeprecationWarning) as e:
@@ -980,7 +1000,7 @@ class Model_Builder:
                 x = x.reshape(-1, 1)
                 return self.resilient_predict_probs(obj, x)
             elif "dense" in str(e) and sparse.issparse(x):
-                x = x.toarray()
+                x = x.to_dense()
                 self.use_sparse = False
                 return self.resilient_predict_probs(obj, x)
             elif hasattr(obj, 'n_jobs') and obj.n_jobs != 1:
@@ -995,9 +1015,12 @@ class Model_Builder:
             else:
                 raise
 
-        return preds, x
+        return pd.DataFrame(data=preds, index=x.index), x
 
-    def resilient_inverse_transform(self, model: sk_prep.LabelEncoder, preds: np.ndarray) -> np.ndarray:
+    def resilient_inverse_transform(self,
+                                    model: sk_prep.LabelEncoder,
+                                    preds: Union[pd.Series, pd.SparseSeries]) \
+            -> pd.DataFrame:
         try:
             preds_str = model.inverse_transform(preds.astype(int))
         except TypeError as e:  # This will handle a bug with using a Numpy ndarray as an index. FUCKING HELL.
@@ -1005,7 +1028,9 @@ class Model_Builder:
             preds = preds.tolist()
             preds_str = [model.classes_[i] for i in preds]
             pass
-        return preds_str
+
+        preds_df = pd.DataFrame(data=preds_str, columns=preds.columns)
+        return preds_df
 
     def train_predictive_model(self,
                                model: Model,
@@ -1453,7 +1478,7 @@ def update_df_outer(first: Union[pd.DataFrame, pd.SparseDataFrame], other: Union
             first[c] = np.NaN
     print(first[first.index.duplicated()])
     print(other[other.index.duplicated()])
-    first.update(other,)
+    first.update(other)
 
 
 def reverse_enumerate(l):
