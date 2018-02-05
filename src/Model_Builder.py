@@ -1485,10 +1485,10 @@ def reduce_variance_corr(df: pd.DataFrame, x_column_names: list, y_column_names:
         max_corr_val = 0.8
 
     # Determine the p-values of the dataset and when a field must be dropped, prefer the field with the higher p-value
-    if len(np.unique(y)) == 2:
-        scores, p_vals = sk_feat_sel.f_classif(df.loc[:, x_column_names], df.loc[:,y_column_names])
+    if len(np.unique(df.loc[:, y_column_names])) == 2:
+        scores, p_vals = sk_feat_sel.f_classif(df.loc[:, x_column_names], df.loc[:, y_column_names])
     else:
-        scores, p_vals = sk_feat_sel.f_regression(df.loc[:, x_column_names], df.loc[:,y_column_names])
+        scores, p_vals = sk_feat_sel.f_regression(df.loc[:, x_column_names], df.loc[:, y_column_names])
 
     # Iterates through Correlation Matrix Table to find correlated columns
     for i, v in enumerate(x_column_names[:-1]):
