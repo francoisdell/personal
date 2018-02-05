@@ -612,7 +612,7 @@ class data_source:
                                         , observation_end=end_dt)
         elif self.provider == 'eod_hist':
             url = 'https://eodhistoricaldata.com/api/eod/{0}'.format(self.code)
-            params = {'api_token': '599dc44361b10'}
+            params = {'api_token': open('token_eodhist.txt', mode='r').read()}
             expire_after = timedelta(days=1).total_seconds()
             session = requests_cache.CachedSession(cache_name='cache', backend='sqlite', expire_after=expire_after)
             r = session.get(url, params=params)
@@ -640,7 +640,7 @@ class data_source:
 
         elif self.provider == 'quandl':
             self.data = quandl.get(self.code
-                                   , authtoken="xg_fvD6FLD_qzg2Mc5z-"
+                                   , authtoken=open('token_quandl.txt', mode='r').read()
                                    , collapse="quarterly"
                                    , start_date=start_dt
                                    , end_date=end_dt)['Value']
@@ -648,7 +648,7 @@ class data_source:
             self.data = bls.get_series([self.code]
                                 , startyear=datetime.strptime(start_dt, '%Y-%m-%d').year
                                 , endyear=datetime.strptime(end_dt, '%Y-%m-%d').year
-                                , key='3d75f024d5f64d189e5de4b7cbb99730'
+                                , key=open('token_bls.txt', mode='r').read()
                                 )
         elif self.provider == 'worldbank':
             self.data = wbdata.get_data(self.code,
@@ -660,7 +660,6 @@ class data_source:
                                         keep_levels=False
                                    )
             print(self.data)
-            lol=1
         print("Collected data for [{0}]".format(self.code))
 
 
@@ -1275,7 +1274,7 @@ if __name__ == '__main__':
     prev_rec_field_name = 'recession_usa_time_since_prev'
     next_rec_field_name = 'recession_usa_time_until_next'
     verbose = False
-    fred = Fred(api_key='b604ef6dcf19c48acc16461e91070c43')
+    fred = Fred(api_key=open('token_fred.txt', mode='r').read())
     ewm_alpha = 0.125  # Halflife for EWM calculations. 4.2655 corresponds to a 0.125 weight.
     use_vwma = True
     default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster, if less ideal.

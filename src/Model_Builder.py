@@ -349,9 +349,9 @@ class Model_Builder:
                 max_idx = min(len(self.df.index), (s + 1) * max_slice_size)
                 print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
 
-                df_valid_iter = self.df.loc[mask_all, list(x_columns.keys())].iloc[min_idx:max_idx]
+                df_valid_iter = self.df.loc[mask_all, :].iloc[min_idx:max_idx]
                 x_valid_columns, x_all, x_mappings = self.get_vectors(df_valid_iter, self.x_fields, x_mappings)
-
+                update_df_outer(self.df, x_all)
                 # print(x_validate)
                 calculate_probs = hasattr(clf, 'classes_') \
                                   and hasattr(clf, 'predict_proba') \
@@ -659,6 +659,7 @@ class Model_Builder:
 
                 df_valid_iter = self.df.loc[mask_validate, :].iloc[min_idx:max_idx]
                 _, x_validate, x_mappings = self.get_vectors(df_valid_iter, self.x_fields, x_mappings)
+                update_df_outer(self.df, x_validate)
 
                 # print(x_validate)
                 # print("Prediciton Matrix Shape: {0}".format(x_validate.shape))
@@ -754,7 +755,7 @@ class Model_Builder:
                                                                   y_column_names=y_column_names,
                                                                   max_corr_val=self.correlation_max
                                                                   )
-                    [x_columns.pop(key) for key in x_columns.keys() if key not in reduced_x_column_names]
+                    [x_columns.pop(key) for key in list(x_columns.keys()) if key not in reduced_x_column_names]
                 elif self.correlation_method == 'pca':
                     pca_df, reduced_x_column_names = reduce_variance_pca(df=self.df.loc[mask, :],
                                                                          column_names=list(x_columns.keys()),

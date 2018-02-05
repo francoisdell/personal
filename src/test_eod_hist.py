@@ -5,7 +5,7 @@ from datetime import timedelta
 import requests
 
 code = 'AAPL'
-api_token = '599dc44361b10'
+api_token = open('token_eodhist.txt', mode='r').read()
 url = 'https://eodhistoricaldata.com/api/eod/{0}?api_token={1}'.format(code, api_token)
 params = {'api_token': api_token}
 expire_after = timedelta(days=1).total_seconds()
