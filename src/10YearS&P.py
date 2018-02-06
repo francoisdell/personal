@@ -536,7 +536,7 @@ def predict_recession_time(df: pd.DataFrame,
                           stack_include_preds=stack_include_preds,
                           final_include_data=final_include_data,
                           use_test_set=True,
-                          correlation_method='corr',
+                          correlation_method='pca',
                           correlation_max=mb_correlation_max,
                           use_sparse=False,
                           codify_nulls=False
@@ -1097,6 +1097,9 @@ def reduce_variance_corr(df: pd.DataFrame, fields: list, max_corr_val: float, y:
 
     # Iterates through Correlation Matrix Table to find correlated columns
     for i, v in enumerate(fields[:-1]):
+        if v in drop_cols:
+            continue
+
         i2, c = sorted([(i2+1, v2) for i2, v2 in enumerate(corr_matrix.iloc[i, i+1:])], key=lambda tup: tup[1])[-1]
 
         if c > max_corr_val:
@@ -1260,8 +1263,8 @@ if __name__ == '__main__':
     diff_quarters = [8, 16, 24]
 
     # VARIANCE REDUCTION. Either PCA Variance or Correlation Limits
-    correlation_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
-    max_correlation = 0.90  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
+    correlation_method = 'pca'  # Use either None, 'corr' for correlations, or 'pca' for PCA
+    max_correlation = 0.95  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
 
     # DIMENSION REDUCTION. Either PCA Variance or Correlation Rankings
     dimension_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
@@ -1892,8 +1895,8 @@ if __name__ == '__main__':
         # VARIANCE REDUCTION: Remove any highly correlated fields and/or use pca to eliminate correlation.
         ##########################################################################################################
         if (correlation_method is not None) and max_correlation < 1. and dimension_method != 'pca':
-            if dimension_method == 'corr':
-                x_names = reduce_variance_corr(df=df, fields=x_names, max_corr_val=max_correlation)
+            if correlation_method == 'corr':
+                x_names = reduce_variance_corr(df=df, fields=x_names, max_corr_val=max_correlation, y=df[sp_field_name])
             elif correlation_method == 'pca':
                 df, x_names = reduce_variance_pca(df=df, field_names=x_names, explained_variance=max_correlation)
             print('X Names Length: {0}'.format(len(x_names)))
