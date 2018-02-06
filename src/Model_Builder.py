@@ -769,6 +769,7 @@ class Model_Builder:
                                                                          column_names=list(x_columns.keys()),
                                                                          explained_variance=self.correlation_max
                                                                          )
+
                     x_columns = {k: None for k in reduced_x_column_names}
                 else:
                     raise ValueError('Incorrect variance reduction method provided! [{0}]'.format(
