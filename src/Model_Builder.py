@@ -51,6 +51,7 @@ from sklearn.naive_bayes import BernoulliNB, MultinomialNB
 from sklearn.neighbors import NearestCentroid
 from sklearn.svm import SVC, SVR, NuSVR, NuSVC
 from sklearn.metrics import r2_score
+from xgboost import XGBClassifier, XGBRegressor
 from scipy.special import expit
 from numbers import Number
 from sklearn import metrics
@@ -418,6 +419,10 @@ class Model_Builder:
                 else:
                     self.x_fields = pred_x_fields
 
+                    if self.final_include_data or idx == 0:
+                        corr_rules = (self.correlation_method, self.correlation_max)
+                    else:
+                        corr_rules = None
                     self.df, x_train, self.x_fields, x_columns, x_mappings = \
                         self.get_fields(self.df,
                                         self.x_fields,
@@ -990,6 +995,10 @@ class Model_Builder:
                 clf = MultinomialNB()
             elif model.model_class == 'nearest_centroid':
                 clf = NearestCentroid()
+            elif model.model_class == 'xgb_r':
+                clf = XGBRegressor()
+            elif model.model_class == 'xgb_c':
+                clf = XGBClassifier()
             else:
                 raise ValueError('Incorrect model_type given. Cannot match [%s] to a model.' % model.model_class)
 
@@ -1386,7 +1395,7 @@ class Model_Builder:
                 if self.use_sparse:
                     final_matrix = sparse.csr_matrix(final_matrix)
                 elif len(final_matrix.shape) == 1:
-                    final_matrix.reshape(-1, 1)
+                    final_matrix.values.reshape(-1, 1)
                 final_matrix = final_matrix.transpose()
 
             # if final_matrix.shape[0] > 244:
@@ -1416,7 +1425,7 @@ class Model_Builder:
             if self.use_sparse:
                 m = [sparse.csc_matrix(d) if not sparse.issparse(d) else d for d in list(m)]
             else:
-                m = [d.toarray() if sparse.issparse(d) else (d.reshape(-1, 1) if len(d.shape) == 1 else d) for d in
+                m = [d.toarray() if sparse.issparse(d) else (d.values.reshape(-1, 1) if len(d.shape) == 1 else d) for d in
                      list(m)]
             m = tuple(m)
 
