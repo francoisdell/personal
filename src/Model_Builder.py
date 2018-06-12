@@ -52,6 +52,8 @@ from sklearn.neighbors import NearestCentroid
 from sklearn.svm import SVC, SVR, NuSVR, NuSVC
 from sklearn.metrics import r2_score
 from scipy.special import expit
+import skflow
+import tensorflow as tf
 from numbers import Number
 from sklearn import metrics
 import warnings
@@ -930,7 +932,7 @@ class Model_Builder:
                       obj,
                       x: Union[pd.DataFrame, pd.SparseDataFrame],
                       y: Union[pd.Series, pd.SparseSeries]) \
-            -> (GridSearchCV):
+            -> GridSearchCV:
         try:
             # y = y.values.reshape(-1, 1)
             obj.fit(x, y)
@@ -1099,6 +1101,20 @@ class Model_Builder:
                 layer_size = max(int(math.pow(x_levels, 0.5 / nn_layers)), 1)
                 layer_sizes = [layer_size for l in range(nn_layers)]
                 clf.hidden_layer_sizes = layer_sizes
+            elif model.model_class == 'rnn_c':
+                rnn_size = 3
+                x_levels = len(x_columns)
+                clf = skflow.TensorFlowRNNClassifier(rnn_size=rnn_size, n_classes=15, cell_type='gru',
+                                                     input_op_fn=lambda x: tf.split(1, x_levels, x), num_layers=1,
+                                                     bidirectional=False, sequence_length=None, steps=1000,
+                                                     optimizer='Adam', learning_rate=0.01, continue_training=True)
+            elif model.model_class == 'rnn_r':
+                rnn_size = 3
+                x_levels = len(x_columns)
+                clf = skflow.TensorFlowRNNRegressor(rnn_size=rnn_size, n_classes=15, cell_type='gru',
+                                                    input_op_fn=lambda x: tf.split(int(1), x_levels, x), num_layers=1,
+                                                    bidirectional=False, sequence_length=None, steps=1000,
+                                                    optimizer='Adam', learning_rate=0.01, continue_training=True)
             elif model.model_class == 'svc':
                 clf = SVC()
             elif model.model_class == 'svr':
@@ -1321,7 +1337,7 @@ class Model_Builder:
                         clf = model.trained_model
                     else:
 
-                        grid = self.resilient_fit(grid, x_train, y_train)
+                        grid = self.resilient_fit(grid, x_train.astype(float), y_train.astype(float))
 
                         print(grid)
                         # summarize the results of the grid search

@@ -1242,8 +1242,9 @@ if __name__ == '__main__':
     # Do you want to predict returns? Or Recessions?
     do_predict_returns = True
     do_predict_recessions = False
-    do_predict_next_recession_method = None  # None/False, 'SARIMAX', or 'STACKING'
+    do_predict_next_recession_method = False  # None/False, 'SARIMAX', or 'STACKING'
     use_fast_models = True
+    use_test_models = True
 
     returns_predict_quarters_forward = [32]
     recession_predict_quarters_forward = [6]
@@ -1334,7 +1335,10 @@ if __name__ == '__main__':
 
     # SET THE MODELS FOR THE RETURNS PREDICTION METHOD
     if do_predict_returns:
-        if use_fast_models:
+        if use_test_models:
+            initial_models = []
+            final_models = ['rnn_r']
+        elif use_fast_models:
             initial_models = ['rfor_r']
             final_models = ['linreg']
         else:
