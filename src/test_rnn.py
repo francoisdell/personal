@@ -23,6 +23,7 @@ class RecurrentNerualNetwork:
         self.rnn_size = rnn_size
 
     def recurrent_neural_network(self, x):
+
         layer = {'weights':tf.Variable(tf.random_normal([self.rnn_size, self.n_classes])),
                  'biases':tf.Variable(tf.random_normal([self.n_classes]))}
 
@@ -38,6 +39,7 @@ class RecurrentNerualNetwork:
         return output
 
     def train(self, x):
+
         prediction = self.recurrent_neural_network(x)
         cost = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits_v2(labels=y, logits=prediction))
         optimizer = tf.train.AdamOptimizer().minimize(cost)
@@ -67,14 +69,17 @@ class RecurrentNerualNetwork:
 
 if __name__ == '__main__':
 
+    # sess = tf.Session()
+    # print(sess)
+
     mnist = input_data.read_data_sets("/tmp/data/", one_hot=True)
 
     hm_epochs = 3
     n_classes = 10
-    batch_size = 128
+    batch_size = 64
     chunk_size = 28
     n_chunks = 28
-    rnn_size = 128
+    rnn_size = 64
 
     x = tf.placeholder('float', [None, n_chunks, chunk_size])
     y = tf.placeholder('float')

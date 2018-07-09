@@ -1442,6 +1442,7 @@ if __name__ == '__main__':
     data_sources['med_family_income'] = data_source('MEFAINUSA646N', 'fred')
     data_sources['combanks_business_loans'] = data_source('BUSLOANS', 'fred')
     data_sources['combanks_assets_tot'] = data_source('TLAACBW027SBOG', 'fred')
+    data_sources['combanks_realestate_loans'] = data_source('RELACBQ158SBOG', 'fred')
     data_sources['mortage_debt_individuals'] = data_source('MDOTHIOH', 'fred')
     data_sources['capacity_util_tot'] = data_source('CAPUTLB50001SQ', 'fred')
     data_sources['capacity_util_mfg'] = data_source('CUMFNS', 'fred')
