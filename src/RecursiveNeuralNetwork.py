@@ -108,6 +108,11 @@ class RecursuveNeuralNetwork:
 
         return _predictions_series
 
+    def predict(self, x):
+        feed_dict = {'x': [x]}
+        classification = tf.run(y, feed_dict)
+        print(classification)
+
     def plot(self,
              loss_list,
              predictions_series,
