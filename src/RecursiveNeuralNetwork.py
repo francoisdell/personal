@@ -4,6 +4,8 @@ import tensorflow as tf
 import matplotlib
 matplotlib.use('TkAgg')
 from matplotlib import pyplot as plt
+import os
+
 
 class RecursuveNeuralNetwork:
 
@@ -22,6 +24,7 @@ class RecursuveNeuralNetwork:
         self.num_classes = num_classes
         self.batch_size = batch_size
         self.num_layers = num_layers
+        self.checkpoint_dir = "tmp"
 
     def fit(self,
             x: np.ndarray,
@@ -31,8 +34,8 @@ class RecursuveNeuralNetwork:
         num_batches = x.shape[1] // self.batch_size // self.truncated_backprop_length
 
 
-        batchX_placeholder = tf.placeholder(tf.float32, [self.batch_size, self.truncated_backprop_length, x.shape[2]])
-        batchY_placeholder = tf.placeholder(tf.int32, [self.batch_size, self.truncated_backprop_length])
+        batchX_placeholder = tf.placeholder(tf.float32, [self.batch_size, self.truncated_backprop_length, x.shape[2]], name='input')
+        batchY_placeholder = tf.placeholder(tf.int32, [self.batch_size, self.truncated_backprop_length], name='target')
 
         init_state = tf.placeholder(tf.float32, [self.num_layers, 2, self.batch_size, self.state_size])
         state_per_layer_list = tf.unstack(init_state, axis=0)
@@ -61,7 +64,7 @@ class RecursuveNeuralNetwork:
         labels = tf.reshape(batchY_placeholder, [-1])
 
         logits_series = tf.unstack(tf.reshape(logits, [self.batch_size, self.truncated_backprop_length, 2]), axis=1)
-        predictions_series = [tf.nn.softmax(logit) for logit in logits_series]
+        predictions_series = [tf.nn.softmax(logit, name='output') for logit in logits_series]
 
         losses = tf.nn.sparse_softmax_cross_entropy_with_logits(logits=logits, labels=labels)
         total_loss = tf.reduce_mean(losses)
@@ -69,11 +72,17 @@ class RecursuveNeuralNetwork:
         # Could also use AdamOptimizer?
         train_step = tf.train.AdagradOptimizer(0.3).minimize(total_loss)
 
+        # Add ops to save and restore all the variables.
+        saver = tf.train.Saver()
+
         with tf.Session() as sess:
+            if not tf.gfile.Exists(self.checkpoint_dir):
+                tf.gfile.MakeDirs(self.checkpoint_dir)
+
             sess.run(tf.global_variables_initializer())
-            plt.ion()
-            plt.figure()
-            plt.show()
+            # plt.ion()
+            # plt.figure()
+            # plt.show()
             loss_list = []
 
             for epoch_idx in range(self.num_epochs):
@@ -99,19 +108,54 @@ class RecursuveNeuralNetwork:
 
                     loss_list.append(_total_loss)
 
-                    if batch_idx % 100 == 0:
-                        print("Step", batch_idx, "Batch loss", _total_loss)
-                        self.plot(loss_list, _predictions_series, batchX, batchY)
+                    # if batch_idx % 100 == 0:
+                    #     print("Step", batch_idx, "Batch loss", _total_loss)
+                    #     self.plot(loss_list, _predictions_series, batchX, batchY)
 
-        plt.ioff()
-        plt.show()
+            # Save the variables to disk.
+            saved_file = saver.save(sess, os.path.join(self.checkpoint_dir, "model.ckpt"))
+            print("Saved to " + saved_file)
+
+        # plt.ioff()
+        # plt.show()
+
+        self.model = _current_state
+
+        print(tf.get_default_graph().as_graph_def())
 
         return _predictions_series
 
     def predict(self, x):
-        feed_dict = {'x': [x]}
-        classification = tf.run(y, feed_dict)
-        print(classification)
+
+        saver = tf.train.Saver()
+        graph = tf.Graph()
+        with graph.as_default():
+            session_conf = tf.ConfigProto(log_device_placement=False)
+
+            with tf.Session(config=session_conf) as sess:
+
+                # sess.run(tf.global_variables_initializer())
+
+                # restore if necessary
+                ckpt = tf.train.get_checkpoint_state(self.checkpoint_dir)
+                if ckpt:
+                    last_model = ckpt.model_checkpoint_path
+                    print("Loading " + last_model)
+                    saver.restore(sess, last_model)
+                    print("Model restored.")
+
+                input = graph.get_operation_by_name("input").outputs[0]
+                prediction = graph.get_operation_by_name("output").outputs[0]
+                newdata=x
+                print(sess.run(prediction, feed_dict={input: newdata}))
+
+        return prediction
+
+        # feed_dict = {'x:0': [x]}
+        # with tf.Session() as sess:
+        #     predictions = sess.run(self.model, feed_dict)
+        # print('==========  Predictions  ==========\n' + predictions)
+        # return predictions
 
     def plot(self,
              loss_list,
@@ -140,10 +184,8 @@ class RecursuveNeuralNetwork:
         plt.draw()
         plt.pause(0.0001)
 
-
-    def generateData(self):
+    def generate_data(self, total_series_length: int=50000):
         echo_step = 3
-        total_series_length = 50000
 
         x = np.array(np.random.choice(2, total_series_length, p=[0.5, 0.5]))
         x2 = np.roll(x, -1*echo_step)
@@ -161,11 +203,14 @@ class RecursuveNeuralNetwork:
 
 
 if __name__ == '__main__':
-    rnn = RecursuveNeuralNetwork(truncated_backprop_length=10)
-    x, y = rnn.generateData()
+    rnn = RecursuveNeuralNetwork(truncated_backprop_length=10, num_epochs=3)
+    x, y = rnn.generate_data()
 
     preds = rnn.fit(x,y)
 
     print(y)
     print(preds)
+
+    x, y = rnn.generate_data(total_series_length=500)
+    preds = rnn.predict(x)
     lol=1
