@@ -1057,7 +1057,9 @@ def reduce_vars_corr(df: pd.DataFrame, field_names: list, max_num: float):
     if num_vars > max_num:
 
         if df.isnull().any().any():
-            df, field_names = impute_if_any_nulls(df.astype(float), field_names, imputer=default_imputer)
+            imputed_df, field_names = impute_if_any_nulls(df.loc[:, field_names].astype(float), imputer=default_imputer)
+            for n in x_names:
+                df[n] = imputed_df[n]
         # Creates Correlation Matrix
         corr_matrix = df.loc[:, field_names].corr()
 
@@ -1622,8 +1624,9 @@ if __name__ == '__main__':
 
         print(df['equity_alloc'])
 
-        df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
-
+        imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
+        for n in x_names:
+            df[n] = imputed_df[n]
         print(df['equity_alloc'])
         ##########################################################################################################
         # Derive trend metric variables
