@@ -11,83 +11,137 @@ import getopt
 import sys
 import inspect
 import shutil
+import itertools
 import time
 from datetime import date
 import platform
 import subprocess
-from DataDelivery import XML_Parser
+import importlib
+import win32wnet
+from re import search as re_search
 
 global log
 
-def create_logger(report_name: str):
 
+def create_logger(report_name: str):
     s = Settings.Settings(report_name=report_name)
     logfile_addr = s.get_logfile_addr()
-    with open(logfile_addr, 'w'): # Clears the logfile
+    with open(logfile_addr, 'w'):  # Clears the logfile
         pass
 
+    global log
     # create a logger
-    logger = logging.getLogger(getExecFile())
-    logger.setLevel(logging.INFO)
+    try:
+        log = logging.getLogger(get_report_name())
+    except:
+        log = logging.getLogger(get_exec_file(whole_path=False))
+
+    log.setLevel(logging.INFO)
 
     # create a file handler
     handler = logging.FileHandler(logfile_addr)
     handler.setLevel(logging.INFO)
     # create a logging format
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     handler.setFormatter(formatter)
 
     # add the handlers to the logger
-    logger.addHandler(handler)
-    global log
-    log = logger
+    log.addHandler(handler)
+    log.info('============ LOG CREATED ============')
+
 
 def get_logger():
     global log
-    log = logging.getLogger(getExecFile())
-
-def printAndLog(msg, log_type: str=None):
-    print(msg)
     try:
-        log
+        if log:
+            return log
+        else:
+            raise Exception()
     except:
-        get_logger()
+        try:
+            create_logger(get_report_name())
+        except:
+            create_logger(get_exec_file(whole_path=False))
+        return log
 
+
+def print_and_log(msg, log_type: str = None, end='\n'):
+    print(msg, end=end)
+    l = get_logger()
     if log_type == 'info':
-        log.info(msg)
+        l.info(msg)
     elif log_type == 'exception':
-        log.exception(msg)
+        l.exception(msg)
     elif log_type == 'error':
-        log.error(msg)
-        
-def getExecFile():
+        l.error(msg)
+
+
+def get_exec_file(whole_path: bool = False):
     # Obtains the name of the python file which was originally executed
     try:
         sFile = os.path.abspath(sys.modules['__main__'].__file__).replace('\\', '/')
     except:
         sFile = sys.executable
-    sFile = os.path.splitext(sFile.split('/')[-1])[0]
+
+    if whole_path:
+        sFile = sFile
+    else:
+        sFile = os.path.splitext(sFile.split('/')[-1])[0]
 
     return sFile
 
-def purgeDir(path, days):
-    printAndLog("Scanning %s for files older than %s days." % (path, days), 'info')
+
+def get_report_name() -> str:
+    return importlib.import_module(get_exec_file()).__report_name__
+
+
+def get_report_owner() -> str:
+    return importlib.import_module(get_exec_file()).__author__
+
+
+def purge_dir(path: str, days: int):
+    print_and_log("Scanning %s for files older than %s days." % (path, days), 'info')
     for f in os.listdir(path):
 
         now = time.time()
         filepath = os.path.join(path, f)
         last_modified = os.stat(filepath).st_mtime
-        if last_modified < now - (days * 86400): # 86400 = number of seconds in one day
-            printAndLog("Removing backup older than %s days: %s" % (f, days), 'info')
+        if last_modified < now - (days * 86400):  # 86400 = number of seconds in one day
+            print_and_log("Removing backup older than %s days: %s" % (f, days), 'info')
             try:
                 shutil.rmtree(filepath)
                 msg = 'DELETED'
             except:
                 msg = 'FAILED TO DELETE'
-            print('{0}: {1} (Last modified on: {2})'.format(msg, f, date.fromtimestamp(last_modified)))
+            print_and_log('{0}: {1} (Last modified on: {2})'.format(msg, f, date.fromtimestamp(last_modified)), 'info')
 
-def normalizeCSV(csvFile, new_csvFile, encoding: str = None):
-    with open(csvFile, mode='r', encoding=encoding) as file:
+
+def get_csv_dialect(csv_file: str, encoding: str = '') -> csv.Dialect:
+    if not encoding:
+        encoding = get_encoding_type(csv_file)
+    file = open(csv_file, mode='r', encoding=encoding)
+    sniff_sample = file.readline()
+    sniffer = csv.Sniffer()
+    if sniff_sample.strip():
+        try:
+            dialect = sniffer.sniff(sniff_sample)
+        except csv.Error as e:
+            if 'delimiter' in str(e):
+                dialect.delimiter = sniffer.preferred[0]
+            else:
+                raise e
+        else:
+            if dialect.delimiter not in sniffer.preferred:
+                dialect.delimiter = sniffer.preferred[0]
+    else:
+        print_and_log('No records found in file [{0}]! Assuming dialect of csv.excel.'.format(csv_file))
+        dialect = csv.excel
+
+    return dialect
+
+
+def normalize_csv(csv_file, new_csv_file, encoding: str = None):
+    with open(csv_file, mode='r', encoding=encoding) as file:
         dialect = csv.Sniffer().sniff(file.readline())
         dialect.doublequote = True
         data_iter = csv.reader(file, dialect=dialect)
@@ -96,11 +150,12 @@ def normalizeCSV(csvFile, new_csvFile, encoding: str = None):
         dialect.delimiter = ','
         dialect.quotechar = '"'
         dialect.lineterminator = '\n'
-        with open(new_csvFile, mode='w', encoding=encoding) as file2:
+        with open(new_csv_file, mode='w', encoding=encoding) as file2:
             data_writer = csv.writer(file2, dialect=dialect)
             data_writer.writerows(data_iter)
 
-def control_dir(dir: str):
+
+def control_dir(dir: str) -> str:
     if "Windows" in platform.architecture()[1]:
         own_cmd = 'takeown /F "%s" /R /d Y' % dir.replace('/', '\\')
         control_cmd = 'icacls "%s" /grant Administrator:(OI)(CI)F /T /Q' % dir.replace('/', '\\')
@@ -110,11 +165,59 @@ def control_dir(dir: str):
 
     if own_cmd:
         print("Ownership Command: %s" % own_cmd)
-        subprocess.call(own_cmd)
+        resp = subprocess.call(own_cmd)
 
     if control_cmd:
         print("Control Command: %s" % own_cmd)
-        subprocess.call(control_cmd)
+        resp = subprocess.call(control_cmd)
+
+    return resp
+
+
+def wnet_connect(fullpath, username, password):
+    netresource = win32wnet.NETRESOURCE()
+    netresource.lpRemoteName = fullpath
+    try:
+        win32wnet.WNetAddConnection2(NetResource=netresource, UserName=username, Password=password, Flags=0)
+        print_and_log('Connected to {0}'.format(fullpath))
+    except (Exception) as err:
+        if isinstance(err, win32wnet.error):
+            # Disconnect previous connections if detected, and reconnect.
+            if err.winerror == 1219:
+                try:
+                    win32wnet.WNetCancelConnection2(fullpath, 0, True)
+                    win32wnet.WNetAddConnection2(NetResource=netresource, UserName=username, Password=password, Flags=0)
+                    pass
+                except:
+                    print_and_log('Unable to connect! Failing. {0}'.format(fullpath))
+                    raise
+        else:
+            print_and_log('Unable to connect! Failing. {0}'.format(fullpath))
+            raise err
+
+
+def regex_get_item(regex: str, value: str, item: int, ignore_errors: bool = True, error_val: object = None):
+    result = re_search(regex, value)
+    try:
+        if result:
+            if item == -1:
+                item = len(result.groups())
+            return result.group(item)
+        else:
+            raise IndexError('No matches found for the regex string')
+    except IndexError as e:
+        if ignore_errors:
+            return error_val
+        else:
+            raise e
+
+
+def prepend_prefix(prefix: str, name: str) -> str:
+    if isinstance(prefix, str) \
+            and not prefix == name[:len(prefix)]:
+        name = prefix + name
+    return name
+
 
 def get_encoding_type(current_file: str):
     print("Determining file encoding: [%s]" % current_file, 'info')
@@ -122,10 +225,12 @@ def get_encoding_type(current_file: str):
     detector.reset()
     for line in open(current_file, 'rb'):
         detector.feed(line)
-        if detector.done: break
+        if detector.done:
+            break
     detector.close()
     print(current_file.split('\\')[-1] + ": " + detector.result['encoding'])
     return detector.result['encoding']
+
 
 def get_arg_response(arg: str, opt: str):
     if arg in ('f', 'false'):
@@ -135,8 +240,8 @@ def get_arg_response(arg: str, opt: str):
     else:
         raise ValueError('Wrong argument given [%s] for option %s' % (arg, opt))
 
-def process_args(args, arglist):
 
+def process_args(args, arglist):
     if len(args) > 1:
         if args[1:][0] == '-h':
             print("You may call this file with any of the following arguments:")
@@ -152,7 +257,7 @@ def process_args(args, arglist):
                               if callable(possible_vals) else possible_vals))
             sys.exit(2)
 
-    str_short_args = 'h' + ':'.join(['%s' % r[1] for r in arglist])
+    str_short_args = 'h' + ''.join(['%s' % r[1] + ':' for r in arglist])
     list_long_args = ['%s=' % r[0] for r in arglist]
     try:
         print("Arguments:", args)
@@ -167,13 +272,16 @@ def process_args(args, arglist):
         key, abbr, default, possible_vals = r
         val = default
         for opt, arg in opts:
+            # if not arg:
+            #     arg = args[0]
+            #     del args[0]
             arg = arg.lower()
             if opt in ("-%s" % abbr, "--%s" % key):
                 if isinstance(default, str):
                     val = arg
                 elif isinstance(default, bool):
                     val = get_arg_response(arg, opt)
-                elif isinstance(default, float):
+                elif isinstance(default, (float, int)):
                     val = float(arg)
                 break
 
@@ -193,11 +301,12 @@ def process_args(args, arglist):
 
     return vals.items()
 
+
 @contextmanager
-def getCSVIter(csvFile, encoding: str = None):
+def csv_iterator(csv_file, encoding: str = None):
     if not encoding:
-        encoding = get_encoding_type(csvFile)
-    file = open(csvFile, mode='r', encoding=encoding)
+        encoding = get_encoding_type(csv_file)
+    file = open(csv_file, mode='r', encoding=encoding)
     dialect = csv.Sniffer().sniff(file.readline())
     dialect.doublequote = True
     data_iter = csv.reader(file, dialect=dialect)
@@ -207,29 +316,183 @@ def getCSVIter(csvFile, encoding: str = None):
     finally:
         file.close()
 
+
+class TabCmd(object):
+    def __init__(self, tabcmd: str, server: str, username: str, linux: bool = False):
+        self.tabcmd = tabcmd
+        self.server = server
+        self.username = username
+        self.linux = linux is True
+
+        # resp = 5
+        # dir = self.tabcmd
+        # while resp == 5:
+        #     dir = '\\'.join(dir.split('\\')[:-1])
+        #     resp = control_dir(dir=dir)
+        # lol=1
+        # if os.path.isfile(tabcmd):
+        #     import stat
+        #     os.chmod(tabcmd, stat.S_IEXEC)
+
+    def _execute_command(self, command):
+        # In Tableau 9.2 we have to append --no-certcheck for linux connections
+        # More info here: https://community.tableau.com/message/450517#450517
+        if self.linux and '--no-certcheck' not in command:
+            command += ["--no-certcheck"]
+
+        if isinstance(command, list):
+            command = ' '.join(command)
+        print(command)
+        subprocess.run(command)
+
+    def login(self, site, password=None, certcheck: bool = False):
+
+        command = [
+            self.tabcmd,
+            'login',
+            "-u", "%s" % self.username,
+            "-p", "%s" % password,
+            "-s", "%s" % self.server,
+            "-t", "%s" % site,
+        ]
+
+        if not certcheck:
+            command += ['--no-certcheck']
+
+        self._execute_command(command)
+
+    def create_project(self, name: str, description: str = None):
+        command = [
+            self.tabcmd,
+            'createproject',
+            "-n", "%s" % name,
+        ]
+        if description is not None:
+            command += ["-d", description]
+        self._execute_command(command)
+
+    def delete_project(self, name: str):
+        command = [
+            self.tabcmd,
+            'deleteproject',
+            name
+        ]
+        self._execute_command(command)
+
+    def refresh_extracts(self, name: str, synchronous: bool = True):
+        command = [
+            self.tabcmd,
+            'refresh_extracts'
+        ]
+        if synchronous:
+            command += ['--synchronous']
+        self._execute_command(command)
+
+    def export(self, url: str, output_path: str, refresh: bool = True, certcheck: bool = False,
+               width: int = 0, height: int = 0):
+
+        if '?' not in url:
+            url += '?'
+        elif url[-1] != '?':
+            url += '&'
+
+        url += ':refresh=' + ('yes' if refresh else 'no')
+
+        tabcmd_addr = '"{0}"'.format(self.tabcmd)
+        url = '"{0}"'.format(url)
+        command = [tabcmd_addr, 'export', url]
+
+        if '.pdf' in output_path:
+            command += ['--pdf']
+        elif '.png' in output_path:
+            command += ['--png']
+
+        if width > 0:
+            command += ['--width ' + str(width)]
+
+        if height > 0:
+            command += ['--height ' + str(height)]
+
+        command += ['--filename "{0}"'.format(output_path)]
+
+        if not certcheck:
+            command += ['--no-certcheck']
+
+        self._execute_command(command)
+
+    def get(self, url: str, output_path: str, refresh: bool = True, certcheck: bool = False, size: str = ''):
+
+        if '?' not in url:
+            url += '?'
+        elif url[-1] != '?':
+            url += '&'
+
+        url += ':refresh=' + ('yes' if refresh else 'no')
+
+        if size:
+            url += '&:size=' + size
+
+        tabcmd_addr = '"{0}"'.format(self.tabcmd)
+        url = '"{0}"'.format(url)
+        command = [tabcmd_addr, 'get', url]
+
+        command += ['--filename "{0}"'.format(output_path)]
+
+        if not certcheck:
+            command += ['--no-certcheck']
+
+        self._execute_command(command)
+
+
 class XML_Query:
-    def __init__(self, prefix: str, tags_to_traverse: list, tags_to_avoid: list=[], tags_to_skip: list=[], folder: str=None):
+    def __init__(self, prefix: str,
+                 tags_to_traverse: list,
+                 tags_to_avoid: list = [],
+                 tags_to_skip: list = [],
+                 folder: str = None,
+                 specific_tags: list = [],
+                 skip_all_child_nodes: bool = False,
+                 ):
+
+        from DataDelivery import XML_Parser
+
         self.prefix = prefix
         self.df_dict = dict()
         self.tags_to_traverse = tags_to_traverse
         self.tags_to_avoid = tags_to_avoid
         self.tags_to_skip = tags_to_skip
+        self.specific_tags = specific_tags
+        self.skip_all_child_nodes = skip_all_child_nodes
         self.dialect = csv.excel
         self.dialect.lineterminator = '\n'
-        self.pickle_file = (folder + '/' if folder else '') + prefix + '.p'
+        if not folder:
+            try:
+                s = Settings.Settings(get_report_name())
+                folder = s.get_report_data_dir()
+            except AttributeError as e:
+                s = Settings.Settings('default')
+                folder = s.get_default_data_dir()
+        self.pickle_file = folder + prefix + '.p'
         self.columns = list()
         self.parser = XML_Parser.Parser()
 
     def add_df(self, sn: str, df: pd.DataFrame):
         self.df_dict[sn] = df
-    
+
     def add_file_addr(self, file_addr: str):
         self.file_addr = file_addr
         self.first_pickle_write = True
         os.makedirs(os.path.dirname(self.file_addr), exist_ok=True)
-    
-    def add_to_pickle(self, df: pd.DataFrame, mode: str='truncate'):
-    
+
+    def set_pickle(self, df: pd.DataFrame, reset_cols: bool = False):
+        with open(self.pickle_file, mode='wb') as f:
+            pickle.dump(df, f)
+            self.first_pickle_write = True
+            if reset_cols:
+                self.columns = df.columns.values
+
+    def add_to_pickle(self, df: pd.DataFrame, mode: str = 'truncate'):
+
         [self.columns.append(c) for c in list(df.columns) if c not in self.columns]
         if mode == 'truncate' and self.first_pickle_write:
             with open(self.pickle_file, mode='wb') as f:
@@ -242,44 +505,98 @@ class XML_Query:
             raise ValueError('Unsure what to do with the current Dataframe. Check the code or your mode setting.')
 
     def to_df(self, root):
-        df = self.parser.xmlToDF(root, self.tags_to_traverse, self.tags_to_avoid, self.tags_to_skip)
+        df = self.parser.xmlToDF(root, self.tags_to_traverse, self.tags_to_avoid, self.tags_to_skip,
+                                 self.specific_tags, self.skip_all_child_nodes)
         return df
 
-    def to_csv(self, mode: str='truncate', remove_fields: list=None):
+    def get_df(self, remove_fields: list = None, delete_after: bool = True):
         first_write = True
+        df = pd.DataFrame()
+
+        if not self.columns:
+            self.columns = set()
+            for df in self.pickle_loader():
+                self.columns.update(df.columns)
+            self.columns = list(self.columns)
+
+        try:
+            for qty, temp_df in enumerate(self.pickle_loader()):
+                # df_cols = list(temp_df.columns)
+                # for c in self.columns:
+                #     if c not in df_cols:
+                #         df[c] = np.nan
+                # temp_df = temp_df[self.columns]
+                # if first_write:
+                #     df = temp_df
+                #     first_write = False
+                # else:
+                #     df = df.append(temp_df, ignore_index=True)
+
+                if first_write:
+                    df = temp_df
+                    first_write = False
+                else:
+                    df = pd.concat([df, temp_df], axis=0, ignore_index=True)
+
+        except (pickle.UnpicklingError):
+            print('[%s] Unpickling Error. Number of objects unpickled: %s' % (self.prefix, qty))
+            pass
+
+        except (FileNotFoundError):
+            print('[{0}] No data found for the XML query constraints'.format(self.prefix))
+            pass
+
+        # df = df[self.columns]
+        if delete_after:
+            try:
+                os.remove(self.pickle_file)
+            except FileNotFoundError:
+                pass
+
+        if remove_fields:
+            df.drop(remove_fields, errors='ignore', inplace=True, axis=1)
+        return df
+
+    def to_csv(self, mode: str = 'truncate', remove_fields: list = None, delete_after: bool = True):
+        first_write = True
+        try:
+            for qty, df in enumerate(self.pickle_loader()):
+                if remove_fields:
+                    df.drop(remove_fields, errors='ignore', inplace=True, axis=1)
+                df_cols = list(df.columns)
+                for c in self.columns:
+                    if c not in df_cols:
+                        df[c] = np.nan
+                df = df[self.columns]
+                if mode == 'truncate' and first_write:
+                    df.to_csv(self.file_addr, header=True, mode='w', index=False, encoding='utf_8')
+                    first_write = False
+                elif mode == 'append' or (mode == 'truncate' and not first_write):
+                    df.to_csv(self.file_addr, header=False, mode='a', index=False, encoding='utf_8')
+
+        except (pickle.UnpicklingError):
+            print('[%s] Unpickling Error. Number of objects unpickled: %s' % (self.prefix, qty))
+            pass
+        except (FileNotFoundError):
+            print('[{0}] No data found for the XML query constraints'.format(self.prefix))
+            pass
+
+        if delete_after:
+            try:
+                os.remove(self.pickle_file)
+            except FileNotFoundError:
+                pass
+
+    def get_csv(self):
+        return pd.read_csv(self.file_addr, index_col=False, encoding='utf_8')
+
+    def pickle_loader(self):
         num_objs = 0
         try:
             with open(self.pickle_file, mode='rb') as f:
                 while True:
-                    df = pickle.load(f)
-                    if remove_fields:
-                        df.drop(remove_fields, errors='ignore', inplace=True, axis=1)
+                    yield pickle.load(f)
                     num_objs += 1
-                    df_cols = list(df.columns)
-                    for c in self.columns:
-                        if c not in df_cols:
-                            df[c] = np.nan
-                    df = df[self.columns]
-                    if mode == 'truncate' and first_write:
-                        df.to_csv(self.file_addr, header=True, mode='w', index=False, encoding='utf_8')
-                        first_write = False
-                    elif mode == 'append' or (mode == 'truncate' and not first_write):
-                        df.to_csv(self.file_addr, header=False, mode='a', index=False, encoding='utf_8')
-    
-        except (EOFError, pickle.UnpicklingError):
-            print('[%s] Number of objects unpickled: %s' % (self.prefix, num_objs))
-            os.remove(self.pickle_file)
-            pass
-        except (FileNotFoundError):
-            print('[{0}] No data found for the XML query constraints (num_objs = {1})'.format(self.prefix, num_objs))
-            pass
-    
-    def get_csv(self):
-        return pd.read_csv(self.file_addr, index_col=False, encoding='utf_8')
-    
-    def pickle_loader(self):
-        try:
-            while True:
-                yield pickle.load(self.pickle_file)
         except EOFError:
+            print('[%s] Number of objects unpickled: %s' % (self.prefix, num_objs))
             pass

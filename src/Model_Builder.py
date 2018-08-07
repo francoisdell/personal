@@ -1598,7 +1598,7 @@ class Model_Builder:
         return m
 
 
-def fix_np_nan(m: Union[pd.DataFrame, pd.SparseDataFrame]) -> Union[pd.DataFrame, pd.SparseDataFrame, np.ndarray, ]:
+def fix_np_nan(m: Union[pd.DataFrame, pd.SparseDataFrame, list]) -> Union[pd.DataFrame, pd.SparseDataFrame, np.ndarray, ]:
     if isinstance(m, (pd.DataFrame, pd.SparseDataFrame)):
         m.loc[:, :] = np.nan_to_num(m.values)
     elif sparse.issparse(m):
