@@ -4,7 +4,7 @@ import pandas as pd
 from datetime import timedelta
 import requests
 
-code = 'AAPL'
+code = 'NYA.INDX'
 api_token = open('token_eodhist.txt', mode='r').read()
 url = 'https://eodhistoricaldata.com/api/eod/{0}?api_token={1}'.format(code, api_token)
 params = {'api_token': api_token}

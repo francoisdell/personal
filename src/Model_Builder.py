@@ -51,7 +51,7 @@ from sklearn.naive_bayes import BernoulliNB, MultinomialNB
 from sklearn.neighbors import NearestCentroid
 from sklearn.svm import SVC, SVR, NuSVR, NuSVC
 from sklearn.metrics import r2_score
-from xgboost import XGBClassifier, XGBRegressor
+# from xgboost import XGBClassifier, XGBRegressor
 from scipy.special import expit
 import skflow
 import tensorflow as tf
@@ -62,7 +62,7 @@ from statistics import mean
 import shutil
 
 pd.options.mode.chained_assignment = None
-pd.set_option('display.height', 1000)
+# pd.set_option('display.height', 1000)
 pd.set_option('display.width', shutil.get_terminal_size()[0])
 pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', 0)
@@ -1152,10 +1152,10 @@ class Model_Builder:
                 clf = MultinomialNB()
             elif model.model_class == 'nearest_centroid':
                 clf = NearestCentroid()
-            elif model.model_class == 'xgb_r':
-                clf = XGBRegressor()
-            elif model.model_class == 'xgb_c':
-                clf = XGBClassifier()
+            # elif model.model_class == 'xgb_r':
+            #     clf = XGBRegressor()
+            # elif model.model_class == 'xgb_c':
+            #     clf = XGBClassifier()
             else:
                 raise ValueError('Incorrect model_type given. Cannot match [%s] to a model.' % model.model_class)
 

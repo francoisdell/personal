@@ -855,7 +855,7 @@ def get_diff_from_trend(s: pd.Series) -> (pd.DataFrame, list):
 
     # fit linear model
     linmod = linear_model.LinearRegression()
-    x = np.reshape(n, (N, 1))
+    x = np.reshape(n.values, (N, 1))
     y = s
     linmod.fit(x, y)
     linmod_rsquared = linmod.score(x, y)
@@ -865,7 +865,7 @@ def get_diff_from_trend(s: pd.Series) -> (pd.DataFrame, list):
 
     # fit log-log model
     loglogmod = linear_model.LinearRegression()
-    x = np.reshape(logn, (N, 1))
+    x = np.reshape(logn.values, (N, 1))
     y = np.log(s)
     loglogmod.fit(x, y)
     loglogmod_rsquared = loglogmod.score(x, y)
@@ -875,7 +875,7 @@ def get_diff_from_trend(s: pd.Series) -> (pd.DataFrame, list):
 
     # fit log model
     logmod = linear_model.LinearRegression()
-    x = np.reshape(n, (N, 1))
+    x = np.reshape(n.values, (N, 1))
     y = np.log(s)
     logmod.fit(x, y)
     logmod_rsquared = logmod.score(x, y)
@@ -883,7 +883,8 @@ def get_diff_from_trend(s: pd.Series) -> (pd.DataFrame, list):
     c = logmod.intercept_
     exponential = np.exp(n * m) * math.exp(c)
 
-    if False:
+    plot_fits = False
+    if plot_fits:
         # plot results
         plt.subplot(1, 1, 1)
         plt.plot(n, s, label='series {0}'.format(s.name), lw=2)
@@ -1487,6 +1488,7 @@ if __name__ == '__main__':
     data_sources['nonfin_equity_liability'] = data_source('NCBEILQ027S', 'fred')
     data_sources['fin_equity_liability'] = data_source('FBCELLQ027S', 'fred')
     data_sources['total_market_cap_usa'] = data_source('WILL5000INDFC', 'fred')
+    data_sources['nyse'] = data_source('NYA.INDX', 'eod_hist')
 
     ds_names = [k for k in data_sources.keys()]
 
@@ -1557,13 +1559,14 @@ if __name__ == '__main__':
         df['tsy_10yr_minus_cpi'] = df['tsy_10yr_yield'] - df['cpi_urb_nonvol']
         df['tsy_10yr_minus_fed_funds_rate'] = df['tsy_10yr_yield'] - df['fed_funds_rate']
         df['tsy_3m10y_curve'] = df['tsy_3mo_yield'] / df['tsy_10yr_yield']
-        df['tobin_q'] = [math.sqrt(x * y) for x, y in df.loc[:,['nonfin_equity','nonfin_networth']].values]  # geom mean
+        df['tobin_q'] = [math.sqrt(x * y) for x, y in df.loc[:, ['nonfin_equity','nonfin_networth']].values]  # geom mean
         df['corp_profit_margins'] = df['nonfin_pretax_profit'] / df['gdp_nom']
         df['mzm_usage'] = df['mzm_velocity'] * df['mzm_moneystock']
         df['m1_usage'] = df['m1_velocity'] * df['m1_moneystock']
         df['m2_usage'] = df['m2_velocity'] * df['m2_moneystock']
         df['nyse_margin_debt_ratio'] = df['nyse_margin_debt'] / df['nyse_margin_credit']
         df['corp_eq_div_nom_gdp'] = df['fin_equity_liability'] / df['gdp_nom']
+        df['nyse_div_gdp'] = df['nyse'] / df['gdp_nom']
 
         x_names = [
             'equity_alloc',
@@ -1619,7 +1622,7 @@ if __name__ == '__main__':
 
         print(df['equity_alloc'])
 
-        df, x_names = impute_if_any_nulls(df, x_names, imputer=default_imputer)
+        df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
 
         print(df['equity_alloc'])
         ##########################################################################################################
@@ -1676,7 +1679,6 @@ if __name__ == '__main__':
             'med_house_price',
             'med_family_income',
             'unempl_rate',
-            'industrial_prod',
             'tsy_10yr_yield',
             'tsy_5yr_yield',
             'tsy_3mo_yield',
