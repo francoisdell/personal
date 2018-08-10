@@ -90,6 +90,7 @@ def get_closes(d: list, fld_names: list=list(('Close', 'col3'))) -> pd.Series:
             raise ValueError("Couldn't find any possible vals {0} in row {1} of the dataset".format(fld_names, i))
     return pd.Series(val_list, index=index_list)
 
+
 # d = Pandas Dataframe
 # ys = [ [cols in the same y], [cols in the same y], [cols in the same y], .. ]
 # invert = [[True/False to invert y axis], [True/False to invert y axis], [True/False to invert y axis], ..]
@@ -174,9 +175,11 @@ def chart(d, ys, invert, log_scale, save_name=None, title=None):
 def get_obj_name(o) -> str:
     return [k for k, v in locals().items() if v is o][0]
 
+
 def reverse_enumerate(l):
    for index in reversed(range(len(l))):
       yield index, l[index]
+
 
 def predict_returns(df: pd.DataFrame,
                     x_names: list,
@@ -227,6 +230,7 @@ def predict_returns(df: pd.DataFrame,
                       stack_include_preds=stack_include_preds,
                       final_include_data=final_include_data,
                       correlation_max=mb_correlation_max,
+                      # correlation_method='pca',
                       use_test_set=True,
                       use_sparse=False,
                       codify_nulls=False
@@ -322,7 +326,6 @@ def predict_returns(df: pd.DataFrame,
             (forward_y_field_name_pred, df[forward_y_field_name_pred]),
             (y_field_name_pred, df[y_field_name_pred]))),
             report_name)
-
 
 
 def predict_recession(df: pd.DataFrame
@@ -929,10 +932,10 @@ def time_since_last_true(s: pd.Series) -> pd.Series:
     s.iloc[0] = prev_val = int(round(s.value_counts()[False] / 2 / s.value_counts()[True],0))
     for i, v in list(s.iteritems())[1:]:
         if v:
-            s.set_value(i, 0)
+            s.at[i] = 0
         else:
-            s.set_value(i, prev_val + 1)
-        prev_val = s.get_value(i)
+            s.at[i] = prev_val + 1
+        prev_val = s.at[i]
     return s.astype(int)
 
 
@@ -1236,7 +1239,7 @@ def get_nyse_margin_debt(field_name: str) -> pd.Series:
         download = s.get(url=url)
 
     strio = io.StringIO(download.text)
-    df = pd.read_table(strio, sep='\\t', skiprows=3)
+    df = pd.read_table(strio, sep='\\t', skiprows=3, engine='python')
 
     df['End of month'] = pd.DatetimeIndex(pd.to_datetime(df['End of month']),
                                   dtype=datetime.date).to_period('M').to_timestamp('M')
@@ -1295,8 +1298,8 @@ if __name__ == '__main__':
     rawdata_from_file = 'auto'  # True = from file || False = reload data from interweb || 'auto' = reload once per week
 
     try:
-        run_hist = pickle_load('run_hist')
-    except:
+        run_hist = pickle_load('run_hist.p')
+    except FileNotFoundError:
         run_hist = dict()
 
     if rawdata_from_file == 'auto':
@@ -1308,24 +1311,25 @@ if __name__ == '__main__':
     # Specify whether the data will be loaded from pickle files or recollected fresh from the interwebz
     finaldata_from_file = False  # Whether to load the final data (post-transformations) from a pickle file
 
-    # Do you want to predict returns? Or Recessions?  # None/False, 'SARIMAX', or 'STACKING'
-    use_fast_models = True
-    use_test_models = True
+    # Do you want to predict SP500 Returns? Or Recessions? # None/False, 'SARIMAX', or 'STACKING'
+    use_fast_models = False
+    use_test_models = False
+    use_neural_nets = True
     do_predict_returns = False
-    do_predict_recessions = True
-    do_predict_next_recession_method = None  # None/False, 'SARIMAX', or 'STACKING'
+    do_predict_recessions = False
+    do_predict_next_recession_method = 'STACKING'  # None/False, 'SARIMAX', or 'STACKING'
 
     returns_predict_quarters_forward = [40]
     recession_predict_quarters_forward = [6]
 
     # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
     mb_train_pct = 0.8  # Defines the train/test split
-    mb_selection_limit = 10.0e-2
-    mb_correlation_max = 1 - ((1 - 0.9) * (1 - mb_train_pct))
+    mb_selection_limit = 0.1
+    mb_correlation_max = 1  # 1 - ((1 - 0.9) * (1 - mb_train_pct))
 
-    interaction_type = None  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
-    correlation_type = 'level_1'  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
-    transform_vars = True  # For each x-variable, creates an additional squared and squared-root version too
+    interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
+    correlation_type = True  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
+    transform_vars = False  # For each x-variable, creates an additional squared and squared-root version too
     trim_stdevs = 3  # Trims outlier variables according to a certain number of standard deviations (0 for skip)
     calc_trend_values = True  # Add x-variables for time since the last rise, and time since the last fall
     calc_std_values = True  # For each x-variable, adds an additional var for the # of stds the variable is from ewma
@@ -1334,10 +1338,10 @@ if __name__ == '__main__':
 
     # VARIANCE REDUCTION. Either PCA Variance or Correlation Limits
     correlation_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
-    max_correlation = 0.90  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
+    max_correlation = 0.95  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
 
     # DIMENSION REDUCTION. Either PCA Variance or Correlation Rankings
-    dimension_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
+    dimension_method = 'corr'  # Use either None, 'corr' for correlations, or 'pca' for PCA
     max_variables = 0  # Options: 0 for 'auto' [n_obs^0.5] or an integer for a specific number of variables.
 
     # Variables specifying what kinds of predictions to run, and for what time period
@@ -1353,9 +1357,8 @@ if __name__ == '__main__':
     ewm_alpha = 0.125  # Halflife for EWM calculations. 4.2655 corresponds to a 0.125 weight.
     use_vwma = True
     default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster, if less ideal.
-    stack_include_preds = False
-    final_include_data = False
-    use_neural_nets = False
+    stack_include_preds = True
+    final_include_data = True
     exec_time = datetime.strftime(datetime.now(), '%Y-%m-%d-%H-%M-%S')
 
     # SET THE MODELS FOR THE NEXT-RECESSION PREDICTION METHOD
@@ -1363,6 +1366,7 @@ if __name__ == '__main__':
         if use_fast_models:
             initial_models = ['rfor_r']
             final_models = ['linreg']
+            final_include_data = True
         else:
             initial_models = ['linreg', 'rfor_r', 'svr', 'gbr', 'knn_r', 'elastic_net', 'pass_agg_r']
             if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
@@ -1383,6 +1387,7 @@ if __name__ == '__main__':
         if use_fast_models:
             initial_models = ['rfor_c']
             final_models = ['logit']
+            final_include_data = True
         else:
             initial_models = ['logit', 'etree_c', 'nearest_centroid', 'gbc', 'bernoulli_nb', 'svc', 'rfor_c']  # pass_agg_c
             # initial_models=['logit','etree_c']
@@ -1410,6 +1415,7 @@ if __name__ == '__main__':
         elif use_fast_models:
             initial_models = ['rfor_r']
             final_models = ['linreg']
+            final_include_data = True
         else:
             initial_models = ['rfor_r', 'gbr', 'linreg', 'elastic_net', 'knn_r', 'svr']
             if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
@@ -1490,7 +1496,6 @@ if __name__ == '__main__':
     data_sources['nonfin_equity_liability'] = data_source('NCBEILQ027S', 'fred')
     data_sources['fin_equity_liability'] = data_source('FBCELLQ027S', 'fred')
     data_sources['total_market_cap_usa'] = data_source('WILL5000INDFC', 'fred')
-    data_sources['nyse'] = data_source('NYA.INDX', 'eod_hist')
 
     ds_names = [k for k in data_sources.keys()]
 
@@ -1524,6 +1529,7 @@ if __name__ == '__main__':
     if resave_data:
         pickle_dump((data_sources,), raw_data_file)
         run_hist['rawdata_last_load'] = datetime.now()
+        pickle_dump(run_hist, 'run_hist.p')
         # modified_z_score = 0.6745 * abs_dev / y_mad
         # modified_z_score[y == m] = 0
         # return modified_z_score > thresh
@@ -1549,6 +1555,7 @@ if __name__ == '__main__':
                 df[k] = ds.data
 
         end_dt = df.index.max()
+        df = df[:-1]
 
         df['tsy_3mo_yield'] = df['tsy_3mo_yield'] / 100.
         df['tsy_5yr_yield'] = df['tsy_5yr_yield'] / 100.
@@ -1557,7 +1564,7 @@ if __name__ == '__main__':
         df['netexp_pct_of_gdp'] = (df['netexp_nom'] / df['gdp_nom'])
         df['base_minus_fed_res_tot'] = df['monetary_base_tot'] - df['fed_reserves_tot']
         df['med_family_income_vs_house_price'] = df['med_house_price'] / df['med_family_income']
-        df['real_med_family_income'] =  df['med_family_income'] / df['cpi_urb_nonvol']
+        df['real_med_family_income'] = df['med_family_income'] / df['cpi_urb_nonvol']
         df['tsy_10yr_minus_cpi'] = df['tsy_10yr_yield'] - df['cpi_urb_nonvol']
         df['tsy_10yr_minus_fed_funds_rate'] = df['tsy_10yr_yield'] - df['fed_funds_rate']
         df['tsy_3m10y_curve'] = df['tsy_3mo_yield'] / df['tsy_10yr_yield']
@@ -1568,7 +1575,7 @@ if __name__ == '__main__':
         df['m2_usage'] = df['m2_velocity'] * df['m2_moneystock']
         df['nyse_margin_debt_ratio'] = df['nyse_margin_debt'] / df['nyse_margin_credit']
         df['corp_eq_div_nom_gdp'] = df['fin_equity_liability'] / df['gdp_nom']
-        df['nyse_div_gdp'] = df['nyse'] / df['gdp_nom']
+        df['equities_div_gdp'] = df['sp500'] / df['gdp_nom']
 
         x_names = [
             'equity_alloc',
@@ -1606,6 +1613,7 @@ if __name__ == '__main__':
             # 'employment_pop_ratio',
             'nonfin_gross_val',
             'corp_eq_div_nom_gdp',
+            'equities_div_gdp',
         ]
 
         empty_cols = [c for c in df.columns.values if all(df[c].isnull())]
@@ -1715,6 +1723,7 @@ if __name__ == '__main__':
             'us_dollar_index',
             'nonfin_gross_val',
             'corp_eq_div_nom_gdp',
+            'equities_div_gdp',
             # 'nyse_margin_credit',  # has an odd discontunuity in the credit balances in Jan 85. Adjust before using.
             # 'nyse_margin_debt_ratio',  # has an odd discontunuity in the credit balances in Jan 85. Adjust before using.
         ]
@@ -1764,7 +1773,7 @@ if __name__ == '__main__':
         x_names = new_x_names
 
         ##########################################################################################################
-        # Trim all x fields to a threshold of 4 STDs
+        # Trim all x fields to a threshold, expressed in terms of Stdev
         ##########################################################################################################
         if trim_stdevs > 0:
             print('Converting fields to trimmed fields.')

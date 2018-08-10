@@ -26,6 +26,7 @@ import pandas as pd
 import pickle
 import bisect
 import decimal
+import Function_Toolbox as ft
 from scipy import sparse
 from sklearn import exceptions
 import sklearn.feature_extraction.text as sk_text
@@ -260,7 +261,7 @@ class Model_Builder:
             # print("Mask_Test Value Counts\n", pd.Series(mask_test).value_counts())
         # x_mappings, x_columns, x_vectors = set_vectors(df.loc[mask_train_test,], x_fields)
         # y_mappings, y_vectors = set_vectors(df, y_field, is_y=True)
-
+        # print_sp500(self.df)
         try:
             if self.retrain_model:
                 raise ValueError(
@@ -309,14 +310,24 @@ class Model_Builder:
         if self.use_sparse:
             self.df = self.df.to_sparse()
 
+        # print_sp500(self.df)
+
         y_mappings = self.train_models(self.df.loc[mask_train, :], self.y_field)
         _, y_train, y_mappings = self.get_vectors(self.df.loc[mask_train, :], self.y_field, y_mappings, is_y=True)
         y_train_names = y_train.columns.tolist()
-        print('Duplicates in self.df index (SHOULD BE 0): ', self.df[self.df.index.duplicated()])
-        print('Duplicates in y_train index (SHOULD BE 0): ', y_train[y_train.index.duplicated()])
+        if self.df[self.df.index.duplicated()].shape[0] > 0:
+            raise ValueError('Index of dataframe "df" contains dupes!!!')
+        if y_train[y_train.index.duplicated()].shape[0] > 0:
+            raise ValueError('Index of dataframe "y_train" contains dupes!!!')
+
+        # print(ft.str_as_header('DATA CHECKING PROCESSES'))
+        # print('Duplicates in self.df index (SHOULD BE 0): ', self.df[self.df.index.duplicated()].shape[0])
+        # print('Duplicates in y_train index (SHOULD BE 0): ', y_train[y_train.index.duplicated()])
+
         update_df_outer(self.df, y_train)
         # update_df_outer(self.df, y_train)
         # self.df = self.df.combine_first(y_train)
+        # print_sp500(self.df)
 
         x_columns, x_mappings = self.get_fields(y_column_names=y_train_names, mask=mask_train)
 
@@ -357,6 +368,7 @@ class Model_Builder:
                 df_valid_iter = self.df.loc[mask_all, :].iloc[min_idx:max_idx]
                 x_valid_columns, x_all, x_mappings = self.get_vectors(df_valid_iter.loc[:, list(self.x_fields.keys())], self.x_fields, x_mappings)
                 update_df_outer(self.df, x_all)
+                # print_sp500(self.df)
                 # print(x_validate)
                 calculate_probs = hasattr(clf, 'classes_') \
                                   and hasattr(clf, 'predict_proba') \
@@ -373,10 +385,14 @@ class Model_Builder:
             # Generate predictions for this predictive model, for all values. Add them to the DF so they can be
             #  used as predictor variables (e.g. "stacked" upon) later when the next predictive model is run.
             # y_all = np.atleast_1d(y_all)
+            if isinstance(y_mappings[k], sk_prep.LabelEncoder):
+                y_all = y_all.astype(int)
             preds = y_mappings[k].inverse_transform(y_all)
             print('INTERMEDIATE PREDICTIONS')
             print("First 7: ", *preds[:10])
             print("Last 7: ", *preds[-10:])
+
+            # print_sp500(self.df)
 
             new_x_fields = {}
             if calculate_probs:
@@ -418,12 +434,10 @@ class Model_Builder:
                 x_columns.update(new_x_columns)
                 x_columns = self.reduce_dimensions(x_columns, k, mask_train)
 
-            else:
-                # If the fields aren't going to be included during the stacking process, save them for later
-                #   (e.g. save them in a seperate object so we can include them later on in the final models)
-                pred_x_fields.update(new_x_fields)
-                pred_x_mappings.update(new_x_mappings)
-                pred_x_columns.update(new_x_columns)
+            # Save the predictions for later. They'll be added into the dataset for the final model predictions
+            pred_x_fields.update(new_x_fields)
+            pred_x_mappings.update(new_x_mappings)
+            pred_x_columns.update(new_x_columns)
 
             if hasattr(clf, 'intercept_') and (isinstance(clf.intercept_, (list)) and len(clf.intercept_) == 1):
                 print('--- Model over-normalization testing ---\n'
@@ -439,19 +453,18 @@ class Model_Builder:
 
             if self.model_type.initial_models:
 
-                if self.final_include_data:
-
+                if not self.final_include_data:
+                    self.x_fields = pred_x_fields
+                    x_mappings = pred_x_mappings
+                    x_columns = pred_x_columns
+                elif not self.stack_include_preds:
                     self.x_fields.update(pred_x_fields)
                     x_mappings.update(pred_x_mappings)
                     x_columns.update(pred_x_columns)
 
-                else:
-
-                    self.x_fields = pred_x_fields
-                    x_mappings = pred_x_mappings
-                    x_columns = pred_x_columns
-
                 x_columns = self.reduce_dimensions(x_columns, k, mask_train)
+
+            # print_sp500(self.df)
 
             model = self.train_predictive_model(model,
                                                 list(x_columns.keys()),
@@ -467,22 +480,18 @@ class Model_Builder:
 
             # INITIAL AND FINAL MODELS: SHOW MODEL TESTS
             if self.show_model_tests:
-                print("--------------------------\n"
-                      "-- TEST SET APPLICATION --\n"
-                      "--------------------------")
+                print(ft.str_as_header('TEST SET APPLICATION'))
                 _, x_test_df, x_mappings = self.get_vectors(self.df.loc[mask_test, list(self.x_fields.keys())], self.x_fields, x_mappings)
                 _, y_test_df, y_mappings = self.get_vectors(self.df.loc[mask_test, list(self.y_field.keys())], self.y_field, y_mappings, is_y=True)
                 update_df_outer(self.df, x_test_df)
                 update_df_outer(self.df, y_test_df)
 
-                #################################################################
-                # ANDY ANDY ANDY ANDY THIS IS WHERE I LEFT OFF THE REWRITE
-                #################################################################
+                # print_sp500(self.df)
 
                 # if len(x_test.shape) == 1:
                 #     x_test = x_test.reshape(-1, 1)
 
-                print("Total Named Columns: ", len(x_columns))
+                print("Total Named Columns: {0}".format(len(x_columns)))
 
                 coef_list = [['name'] + [new_colname.strip() for new_colname in x_columns.keys()]]
 
@@ -624,7 +633,7 @@ class Model_Builder:
                     try:
                         y_test_probs, x_test_df = self.resilient_predict_probs(clf, x_test_df.loc[:, list(x_columns.keys())])
                         if y_test_probs.shape[1] <= 2:
-                            print('ROC-CURVE AOC', metrics.roc_auc_score(y_test_df, y_test_probs[:, 1]))
+                            print('ROC-CURVE AOC', metrics.roc_auc_score(y_test_df, y_test_probs.loc[:, 1]))
 
                         print("PREDICTION PROBABILITIES")
                         print(y_test_probs)
@@ -636,12 +645,18 @@ class Model_Builder:
                         y_test_preds = self.resilient_inverse_transform(y_mappings[k], preds)
                         # y_test_preds = y_test_preds.tolist()
 
-                        print("Unique integers in y_test:", list(set(y_test_df)))
+                        print("Unique integers in y_test: {0}".format(y_test_df.iloc[:,0].unique().tolist()))
                         y_test_actual = self.resilient_inverse_transform(y_mappings[k], y_test_df)
-                        y_test_actual = y_test_actual.T[0]
+                        # y_test_actual = y_test_actual.T  # [0]
                         # y_test_actual = np.ndarray([x[0] for x in y_test_actual.tolist()])
                         # Create confusion matrix
-                        conf_matrix = pd.crosstab(y_test_actual, y_test_preds, rownames=['actual'], colnames=['predicted'])
+                        if y_test_actual.shape[1] != 1:
+                            raise ValueError('Dataframe y_test_actual is not a 1d dataframe. Cannot use in a crosstab.')
+                        if y_test_preds.shape[1] != 1:
+                            raise ValueError('Dataframe y_test_preds is not a 1d dataframe. Cannot use in a crosstab.')
+                        y_test_actual = y_test_actual.T.squeeze()
+                        y_test_preds = y_test_preds.T.squeeze()
+                        conf_matrix = pd.crosstab(y_test_actual.values, y_test_preds.values, rownames=['actual'], colnames=['predicted'])
                         print("CONFUSION MATRIX")
                         print(conf_matrix)
                         conf_matrix.to_csv('%s/%s' % (data_file_dir, 'conf_matrix.csv'), header=True, encoding='utf_8')
@@ -691,6 +706,7 @@ class Model_Builder:
                     # update_df_outer(y_validate_probs, pred_probs)
                     # update_df_outer(self.df, pred_probs)
 
+            # print_sp500(self.df)
 
             # WHY HSTACK? BECAUSE WHEN THE ndarray is 1-dimensional, apparently vstack doesn't work. FUCKING DUMB.
             # y_validate = np.hstack(y_validate).reshape(-1, 1).astype(int)
@@ -714,8 +730,14 @@ class Model_Builder:
                     df_validate = df_validate.join(df_probs, how='inner')
                 self.new_fields.extend(df_probs.columns.values.tolist())
 
+            # print_sp500(self.df)
+
             for k, v in self.y_field.items():
-                final_preds = y_mappings[k].inverse_transform(y_validate.astype(float))
+                if isinstance(y_mappings[k], sk_prep.LabelEncoder):
+                    y_validate = y_validate.astype(int)
+                else:
+                    y_validate = y_validate.astype(float)
+                final_preds = y_mappings[k].inverse_transform(y_validate)
                 print('FINAL PREDICTIONS')
                 print('First 7: ', *final_preds[:10])
                 print('Last 7: ', *final_preds[-10:])
@@ -730,6 +752,8 @@ class Model_Builder:
             #     return_df = self.df.loc[mask_validate == 0, :].append(df_validate, ignore_index=True)
 
             update_df_outer(self.df, df_validate)
+            # print_sp500(self.df)
+
             yield self.df, model.model_class
 
         # INITIAL AND FINAL MODELS: TRAIN ANY UNTRAINED MODELS
@@ -799,6 +823,7 @@ class Model_Builder:
                     x_columns.pop(col_name)
                     print('Column [{0}] not found to be statistically significant. Removing.'.format(col_name))
 
+        print(ft.str_as_header('After variable selection, there are {0} remaining variables'.format(len(x_columns))))
         return x_columns
 
     def get_vectors(self,
@@ -1430,135 +1455,135 @@ class Model_Builder:
 
         return trained_models
 
-    def get_vectors(self,
-                    df: pd.DataFrame,
-                    field_names: dict,
-                    trained_models: dict,
-                    is_y: bool = False
-                    ):
-
-        final_matrix = None
-        column_names = list()
-        for f, t in list(field_names.items()):
-            if self.verbose:
-                print("TRANSFORMING: ", f, end='')
-            transformed_field_name = f + '_t'
-            if self.codify_nulls:
-                null_field_name = f + '_isnull'
-                df[f + '_isnull'] = df[f].isnull().values.astype(np.float64).reshape(-1, 1)
-                if self.use_sparse:
-                    null_matrix = sparse.csc_matrix(df[f + '_isnull'], dtype=np.float64)
-                else:
-                    null_matrix = df[null_field_name]
-
-
-                null_matrix = null_matrix.astype(np.float64)
-
-            # print(trained_models[f])
-            if isinstance(trained_models[f], sk_prep.LabelEncoder):
-                while 1:
-                    try:
-                        matrix = trained_models[f].transform(df[f].values.astype(str).transpose())
-                        break
-                    except ValueError as e:
-                        print("\nAll Uniques in Series:", sorted(df[f].unique().astype(str)))
-                        print('Length: %s' % len(df[f].unique().astype(str)))
-
-                        # print(str(e).split("\'"))
-                        # for k, v in enumerate(str(e).split("\'")):
-                        #     if k % 2 == 1:
-                        #         trained_models[f].classes_ = np.append(trained_models[f].classes_, v)
-                        print(str(e))
-                        new_classes = [v for k, v in enumerate(str(e).split("\'")) if k % 2 == 1]
-                        le_classes = trained_models[f].classes_
-                        if isinstance(le_classes, np.ndarray):
-                            le_classes = le_classes.tolist()
-                            for v in le_classes:
-                                if isinstance(v, (list, tuple)):
-                                    le_classes = v
-                                    print('Extracted values from ndarray: ', le_classes)
-                                    break
-                        for v in new_classes:
-                            bisect.insort_left(le_classes, v)
-                        trained_models[f].classes_ = le_classes
-                        # trained_models[f].classes_ = np.append(trained_models[f].classes_, new_classes)
-                        print('Added new classes to encoder: %s ' % new_classes)
-                        print('All Classes: %s' % sorted(trained_models[f].classes_))
-                        print('Length: %s' % len(trained_models[f].classes_))
-                        pass
-
-            elif t == 'cat':
-                mkdict = lambda row: dict((col, row[col]) for col in [f])
-                matrix = trained_models[f].transform(df.apply(mkdict, axis=1)).transpose()
-                for v in trained_models[f].get_feature_names():
-                    # final_matrix[v] = matrix
-                    # final_matrix = matrix
-                    column_names.append((v, True, f))
-
-            else:
-                if t == 'doc':
-                    matrix = trained_models[f].transform(df[f].values.astype(str)).transpose()
-                    for v in trained_models[f].get_feature_names():
-                        # Change to false if you want to eliminate the (MANY) possible words
-                        column_names.append((v.encode('ascii', errors='ignore').decode('utf-8', errors='ignore'), True, f))
-
-                # else:
-                elif t == 'num':
-                    df[transformed_field_name] = trained_models[f].transform(df[f]
-                                                                             .apply(pd.to_numeric, errors='coerce')
-                                                                             .round(3).fillna(0).values.reshape(-1, 1))
-                    if is_y:
-                        matrix = df[transformed_field_name].astype(
-                            np.float16).values.transpose()  # Original was float64
-
-                        if isinstance(trained_models[f], sk_prep.MinMaxScaler):
-                            matrix = np.minimum(1, np.maximum(0, fix_np_nan(matrix)))
-
-                            # matrix.data = np.minimum(1, np.maximum(0, fix_np_nan(matrix)))
-                    else:
-
-                        matrix = df[transformed_field_name].astype(np.float64).values
-                        if isinstance(trained_models[f], sk_prep.MinMaxScaler):
-                            matrix = np.minimum(1, np.maximum(0, fix_np_nan(matrix)))
-                        column_names.append((transformed_field_name, True, f))
-
-                else:
-                    raise ValueError('Type provided [(0}] for field [{1}] is not supported.'.format(t, f))
-
-                if self.use_sparse and not is_y:
-                    matrix = sparse.csc_matrix(matrix, dtype=np.float64)
-
-                if self.codify_nulls:
-                    if final_matrix is not None:
-                        final_matrix = self.matrix_vstack((final_matrix, null_matrix))
-                        # final_matrix[null_field_name] = null_matrix
-                    else:
-                        final_matrix = null_matrix
-                    # matrix = self.matrix_vstack((matrix, null_matrix))
-                    column_names.append((null_field_name, True, f))
-
-            if self.verbose:
-                print(' || Shape: {0}'.format(matrix.shape))
-            if final_matrix is not None:
-                if is_y:
-                    # final_matrix.append(matrix)
-                    final_matrix = matrix
-                else:
-                    final_matrix = self.matrix_vstack((final_matrix, matrix))
-
-            else:
-                final_matrix = matrix
-        else:
-            if not is_y:
-                if self.use_sparse:
-                    final_matrix = sparse.csr_matrix(final_matrix)
-                elif len(final_matrix.shape) == 1:
-                    final_matrix.values.reshape(-1, 1)
-                final_matrix = final_matrix.transpose()
-
-            # if final_matrix.shape[0] > 244:
-            #     lol = 1
-            return column_names, final_matrix, trained_models
+    # def get_vectors(self,
+    #                 df: pd.DataFrame,
+    #                 field_names: dict,
+    #                 trained_models: dict,
+    #                 is_y: bool = False
+    #                 ):
+    #
+    #     final_matrix = None
+    #     column_names = list()
+    #     for f, t in list(field_names.items()):
+    #         if self.verbose:
+    #             print("TRANSFORMING: ", f, end='')
+    #         transformed_field_name = f + '_t'
+    #         if self.codify_nulls:
+    #             null_field_name = f + '_isnull'
+    #             df[f + '_isnull'] = df[f].isnull().values.astype(np.float64).reshape(-1, 1)
+    #             if self.use_sparse:
+    #                 null_matrix = sparse.csc_matrix(df[f + '_isnull'], dtype=np.float64)
+    #             else:
+    #                 null_matrix = df[null_field_name]
+    #
+    #
+    #             null_matrix = null_matrix.astype(np.float64)
+    #
+    #         # print(trained_models[f])
+    #         if isinstance(trained_models[f], sk_prep.LabelEncoder):
+    #             while 1:
+    #                 try:
+    #                     matrix = trained_models[f].transform(df[f].values.astype(str).transpose())
+    #                     break
+    #                 except ValueError as e:
+    #                     print("\nAll Uniques in Series:", sorted(df[f].unique().astype(str)))
+    #                     print('Length: %s' % len(df[f].unique().astype(str)))
+    #
+    #                     # print(str(e).split("\'"))
+    #                     # for k, v in enumerate(str(e).split("\'")):
+    #                     #     if k % 2 == 1:
+    #                     #         trained_models[f].classes_ = np.append(trained_models[f].classes_, v)
+    #                     print(str(e))
+    #                     new_classes = [v for k, v in enumerate(str(e).split("\'")) if k % 2 == 1]
+    #                     le_classes = trained_models[f].classes_
+    #                     if isinstance(le_classes, np.ndarray):
+    #                         le_classes = le_classes.tolist()
+    #                         for v in le_classes:
+    #                             if isinstance(v, (list, tuple)):
+    #                                 le_classes = v
+    #                                 print('Extracted values from ndarray: ', le_classes)
+    #                                 break
+    #                     for v in new_classes:
+    #                         bisect.insort_left(le_classes, v)
+    #                     trained_models[f].classes_ = le_classes
+    #                     # trained_models[f].classes_ = np.append(trained_models[f].classes_, new_classes)
+    #                     print('Added new classes to encoder: %s ' % new_classes)
+    #                     print('All Classes: %s' % sorted(trained_models[f].classes_))
+    #                     print('Length: %s' % len(trained_models[f].classes_))
+    #                     pass
+    #
+    #         elif t == 'cat':
+    #             mkdict = lambda row: dict((col, row[col]) for col in [f])
+    #             matrix = trained_models[f].transform(df.apply(mkdict, axis=1)).transpose()
+    #             for v in trained_models[f].get_feature_names():
+    #                 # final_matrix[v] = matrix
+    #                 # final_matrix = matrix
+    #                 column_names.append((v, True, f))
+    #
+    #         else:
+    #             if t == 'doc':
+    #                 matrix = trained_models[f].transform(df[f].values.astype(str)).transpose()
+    #                 for v in trained_models[f].get_feature_names():
+    #                     # Change to false if you want to eliminate the (MANY) possible words
+    #                     column_names.append((v.encode('ascii', errors='ignore').decode('utf-8', errors='ignore'), True, f))
+    #
+    #             # else:
+    #             elif t == 'num':
+    #                 df[transformed_field_name] = trained_models[f].transform(df[f]
+    #                                                                          .apply(pd.to_numeric, errors='coerce')
+    #                                                                          .round(3).fillna(0).values.reshape(-1, 1))
+    #                 if is_y:
+    #                     matrix = df[transformed_field_name].astype(
+    #                         np.float16).values.transpose()  # Original was float64
+    #
+    #                     if isinstance(trained_models[f], sk_prep.MinMaxScaler):
+    #                         matrix = np.minimum(1, np.maximum(0, fix_np_nan(matrix)))
+    #
+    #                         # matrix.data = np.minimum(1, np.maximum(0, fix_np_nan(matrix)))
+    #                 else:
+    #
+    #                     matrix = df[transformed_field_name].astype(np.float64).values
+    #                     if isinstance(trained_models[f], sk_prep.MinMaxScaler):
+    #                         matrix = np.minimum(1, np.maximum(0, fix_np_nan(matrix)))
+    #                     column_names.append((transformed_field_name, True, f))
+    #
+    #             else:
+    #                 raise ValueError('Type provided [(0}] for field [{1}] is not supported.'.format(t, f))
+    #
+    #             if self.use_sparse and not is_y:
+    #                 matrix = sparse.csc_matrix(matrix, dtype=np.float64)
+    #
+    #             if self.codify_nulls:
+    #                 if final_matrix is not None:
+    #                     final_matrix = self.matrix_vstack((final_matrix, null_matrix))
+    #                     # final_matrix[null_field_name] = null_matrix
+    #                 else:
+    #                     final_matrix = null_matrix
+    #                 # matrix = self.matrix_vstack((matrix, null_matrix))
+    #                 column_names.append((null_field_name, True, f))
+    #
+    #         if self.verbose:
+    #             print(' || Shape: {0}'.format(matrix.shape))
+    #         if final_matrix is not None:
+    #             if is_y:
+    #                 # final_matrix.append(matrix)
+    #                 final_matrix = matrix
+    #             else:
+    #                 final_matrix = self.matrix_vstack((final_matrix, matrix))
+    #
+    #         else:
+    #             final_matrix = matrix
+    #     else:
+    #         if not is_y:
+    #             if self.use_sparse:
+    #                 final_matrix = sparse.csr_matrix(final_matrix)
+    #             elif len(final_matrix.shape) == 1:
+    #                 final_matrix.values.reshape(-1, 1)
+    #             final_matrix = final_matrix.transpose()
+    #
+    #         # if final_matrix.shape[0] > 244:
+    #         #     lol = 1
+    #         return column_names, final_matrix, trained_models
 
     def matrix_vstack(self, m: tuple, return_sparse: bool = None):
         if sum([sparse.issparse(d) for d in list(m)]) == 1:
@@ -1598,7 +1623,7 @@ class Model_Builder:
         return m
 
 
-def fix_np_nan(m: Union[pd.DataFrame, pd.SparseDataFrame, list]) -> Union[pd.DataFrame, pd.SparseDataFrame, np.ndarray, ]:
+def fix_np_nan(m: Union[pd.DataFrame, pd.SparseDataFrame, list]) -> Union[pd.DataFrame, pd.SparseDataFrame, np.ndarray]:
     if isinstance(m, (pd.DataFrame, pd.SparseDataFrame)):
         m.loc[:, :] = np.nan_to_num(m.values)
     elif sparse.issparse(m):
@@ -1624,13 +1649,34 @@ def get_unique_name(n: str, vals: list):
     return n
 
 
+def print_sp500(df: pd.DataFrame):
+    if any([x == 1 for x in df.apply(pd.Series.nunique, axis=1)]):
+        lol = 5
+    if df['sp500_40qtr'].mean() < -10.0:
+        lol = 1
+    if 'sp500_40qtr_t' in df.columns:
+        print(ft.str_as_header('FUCKING TESTING {0} (NULLS: {1})'.format(df['sp500_40qtr_t'].mean(), df['sp500_40qtr_t'].isnull().sum())))
+    elif 'sp500_40qtr' in df.columns:
+        print(ft.str_as_header('FUCKING TESTING {0} (NULLS: {1})'.format(df['sp500_40qtr'].mean(), df['sp500_40qtr'].isnull().sum())))
+    else:
+        raise ValueError('SP500 column not found in DF')
+
+
 def update_df_outer(first: Union[pd.DataFrame, pd.SparseDataFrame], other: Union[pd.DataFrame, pd.SparseDataFrame]):
     for c in other.columns.tolist():
         if c not in first.columns.tolist():
             first[c] = np.NaN
-    print(first[first.index.duplicated()])
-    print(other[other.index.duplicated()])
+    for i in first.index.values:
+        if i not in other.index:
+            other = other.reindex(first.index)
+            break
+
+    # print(ft.str_as_header('DATA CHECKING AT END OF "update_df_outer" FUNCTION'))
+    # print(' === Other DF === \n{0}'.format(other[other.index.duplicated()]))
+    # print(' === DF to update with other DF === \n{0}'.format(first[first.index.duplicated()]))
+    # print('Original Size: [This DF - {0}] [Other DF - {1}]'.format(first.shape, other.shape))
     first.update(other)
+    # print('New Size: [This DF - {0}]'.format(first.shape))
 
 
 def reverse_enumerate(l):

@@ -20,4 +20,5 @@ if r.status_code == requests.codes.ok:
 else:
     raise Exception(r.status_code, r.reason, url)
 
-print(data)
+print(data.head())
+print(data.tail())

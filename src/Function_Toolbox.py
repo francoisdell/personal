@@ -196,6 +196,15 @@ def wnet_connect(fullpath, username, password):
             raise err
 
 
+def str_as_header(txt: str, char: str='=') -> str:
+    end_chars = 5
+    end_str = char * (end_chars*1 + 1)
+    txt = end_str + ' ' + txt + ' ' + end_str
+    bookends = char * len(txt)
+    txt = '\n{0}\n{1}\n{0}'.format(bookends, txt)
+    return txt
+
+
 def regex_get_item(regex: str, value: str, item: int, ignore_errors: bool = True, error_val: object = None):
     result = re_search(regex, value)
     try:
