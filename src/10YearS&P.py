@@ -167,7 +167,9 @@ def chart(d, ys, invert, log_scale, save_name=None, title=None):
     else:
         plt.title(list(itertools.chain(*ys))[0])
     if save_name:
-        fig.savefig('{0}/{1}'.format(s.get_reports_dir(), save_name))
+        fig_file = '{0}/{1}'.format(s.get_reports_dir(), save_name)
+        print('Saved figure to {0}'.format(fig_file))
+        fig.savefig(fig_file)
     print("Showing Plot...")
     plt.show()
 
@@ -609,6 +611,7 @@ class data_source:
             else:
                 self.data = self.provider()
         elif self.provider == 'fred':
+            fred = Fred(api_key_file='token_fred.txt')
             self.data = fred.get_series(self.code
                                         , observation_start=start_dt
                                         , observation_end=end_dt)
@@ -1196,6 +1199,7 @@ def remove_high_vif(X: pd.DataFrame, max_num: Union[int,float]=None):
     return X.loc[:, colnames], colnames.tolist()
 
 def calc_equity_alloc() -> pd.Series:
+    fred = Fred(api_key_file='token_fred.txt')
     nonfin_biz_equity_liab = fred.get_series('NCBEILQ027S', observation_start=start_dt, observation_end=end_dt)
     nonfin_biz_credit_liab = fred.get_series('BCNSDODNS', observation_start=start_dt, observation_end=end_dt)
     household_nonprofit_credit_liab = fred.get_series('CMDEBT', observation_start=start_dt, observation_end=end_dt)
@@ -1295,6 +1299,8 @@ def pickle_dump(data: object, name: str, dir: str=None):
 if __name__ == '__main__':
 
     s = Settings(report_name='10YearS&P')
+
+    # Specify whether the data will be loaded from pickle files or recollected fresh from the interwebz
     rawdata_from_file = 'auto'  # True = from file || False = reload data from interweb || 'auto' = reload once per week
 
     try:
@@ -1308,37 +1314,36 @@ if __name__ == '__main__':
         else:
             rawdata_from_file = False
 
-    # Specify whether the data will be loaded from pickle files or recollected fresh from the interwebz
     finaldata_from_file = False  # Whether to load the final data (post-transformations) from a pickle file
 
     # Do you want to predict SP500 Returns? Or Recessions? # None/False, 'SARIMAX', or 'STACKING'
     use_fast_models = False
     use_test_models = False
     use_neural_nets = True
-    do_predict_returns = False
+    do_predict_returns = True
     do_predict_recessions = False
-    do_predict_next_recession_method = 'STACKING'  # None/False, 'SARIMAX', or 'STACKING'
+    do_predict_next_recession_method = False  # None/False, 'SARIMAX', or 'STACKING'
 
     returns_predict_quarters_forward = [40]
     recession_predict_quarters_forward = [6]
+
+    interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
+    correlation_type = True  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
+    transform_vars = True  # For each x-variable, creates an additional squared and squared-root version too
+    trim_stdevs = 4  # Trims outlier variables according to a certain number of standard deviations (0 for skip)
+    calc_trend_values = True  # Add x-variables for time since the last rise, and time since the last fall
+    calc_std_values = True  # For each x-variable, adds an additional var for the # of stds the variable is from ewma
+    calc_diff_from_trend_values = True
+    diff_quarters = [6, 12, 18]
 
     # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
     mb_train_pct = 0.8  # Defines the train/test split
     mb_selection_limit = 0.1
     mb_correlation_max = 1  # 1 - ((1 - 0.9) * (1 - mb_train_pct))
 
-    interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
-    correlation_type = True  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
-    transform_vars = False  # For each x-variable, creates an additional squared and squared-root version too
-    trim_stdevs = 3  # Trims outlier variables according to a certain number of standard deviations (0 for skip)
-    calc_trend_values = True  # Add x-variables for time since the last rise, and time since the last fall
-    calc_std_values = True  # For each x-variable, adds an additional var for the # of stds the variable is from ewma
-    calc_diff_from_trend_values = True
-    diff_quarters = [8, 16, 24]
-
     # VARIANCE REDUCTION. Either PCA Variance or Correlation Limits
-    correlation_method = None  # Use either None, 'corr' for correlations, or 'pca' for PCA
-    max_correlation = 0.95  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
+    correlation_method = 'corr'  # Use either None, 'corr' for correlations, or 'pca' for PCA
+    max_correlation = 0.99  # Options: 0 for 'auto' [0.99 for PCA, 0.80 for corr] or a float 0-1 for the amount of explained variance desired.
 
     # DIMENSION REDUCTION. Either PCA Variance or Correlation Rankings
     dimension_method = 'corr'  # Use either None, 'corr' for correlations, or 'pca' for PCA
@@ -1353,12 +1358,12 @@ if __name__ == '__main__':
     prev_rec_field_name = recession_field_name + '_time_since_prev'
     next_rec_field_name = recession_field_name + '_time_until_next'
     verbose = False
-    fred = Fred(api_key=open('token_fred.txt', mode='r').read())
     ewm_alpha = 0.125  # Halflife for EWM calculations. 4.2655 corresponds to a 0.125 weight.
-    use_vwma = True
+    use_vwma = False
+    use_ewma = True
     default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster, if less ideal.
-    stack_include_preds = True
-    final_include_data = True
+    stack_include_preds = False
+    final_include_data = False
     exec_time = datetime.strftime(datetime.now(), '%Y-%m-%d-%H-%M-%S')
 
     # SET THE MODELS FOR THE NEXT-RECESSION PREDICTION METHOD
@@ -1513,8 +1518,6 @@ if __name__ == '__main__':
                     print('New data source added: [{0}]'.format(k))
                     data_sources_temp[k] = data_sources[k]
             data_sources = data_sources_temp
-
-
         else:
             raise ValueError('Per Settings, Reloading Data From Yahoo Finance/FRED/Everything Else.')
     except Exception as e:
@@ -1583,7 +1586,7 @@ if __name__ == '__main__':
             # 'tsy_5yr_yield', # Treasury prices have been generally increasing over the time period. Don't use.,
             # 'tsy_3mo_yield', # Treasury prices have been generally increasing over the time period. Don't use.
             # , 'diff_tsy_10yr_and_cpi' # Makes the models go FUCKING CRAZY,
-            # 'unempl_rate',
+            'unempl_rate',
             # , 'empl_construction'  # Construction employees heave been generally increasing over the time period. Don't use.,
             # 'sp500_peratio',
             'capacity_util_mfg',
@@ -1591,22 +1594,22 @@ if __name__ == '__main__':
             # , 'gold_fix_3pm' # Gold price has been generally increasing over the time period. Don't use.
             # , 'fed_funds_rate' # Fed funds rate has been generally declining over the time period. Don't use.,
             'tsy_3m10y_curve',
-            # 'industrial_prod',
-            # , 'tsy_10yr_minus_fed_funds_rate'
-            # , 'tsy_10yr_minus_cpi'
-            # , 'netexp_pct_of_gdp' # Will cause infinite values when used with SHIFT (really any y/y compare)
-            # , 'gdp_nom' # GDP is generally always rising. Don't use.
-            # , 'netexp_nom' # Will cause infinite values when used with SHIFT (really any y/y compare)
-            # , 'base_minus_fed_res_adj' # May also make the models go FUCKING CRAZY # Not much history
-            # , 'tsy_30yr_yield' # Not much history,
+            'industrial_prod',
+            'tsy_10yr_minus_fed_funds_rate',
+            'tsy_10yr_minus_cpi',
+            # 'netexp_pct_of_gdp',  # Will cause infinite values when used with SHIFT (really any y/y compare)
+            # 'gdp_nom',  # GDP is generally always rising. Don't use.
+            # 'netexp_nom',  # Will cause infinite values when used with SHIFT (really any y/y compare)
+            # 'base_minus_fed_res_adj',  # May also make the models go FUCKING CRAZY # Not much history
+            # 'tsy_30yr_yield',  # Not much history,
             'med_family_income_vs_house_price',
-            # , 'pers_savings_rt',
+            # 'pers_savings_rt',
             'corp_profit_margins',
             'cape',
             'tobin_q',
-            # , 'mzm_velocity'
-            # , 'm2_velocity'
-            # , 'm1_velocity',
+            # 'mzm_velocity',
+            # 'm2_velocity',
+            # 'm1_velocity',
             'mzm_usage',
             'm2_usage',
             'm1_usage',
@@ -1680,10 +1683,11 @@ if __name__ == '__main__':
         ##########################################################################################################
         print('Adding x-year diff terms.')
         diff_x_names = [
-            # 'gdp_nom',
+            'sp500',
+            'gdp_nom',
             'equity_alloc',
-            # 'cpi_urb_nonvol',
-            # 'empl_construction',
+            'cpi_urb_nonvol',
+            'empl_construction',
             'industrial_prod',
             'housing_starts',
             'housing_supply',
@@ -1693,19 +1697,19 @@ if __name__ == '__main__':
             'tsy_10yr_yield',
             'tsy_5yr_yield',
             'tsy_3mo_yield',
-            # 'tsy_10yr_minus_fed_funds_rate',
-            # 'tsy_10yr_minus_cpi',
-            # 'real_med_family_income',
+            'tsy_10yr_minus_fed_funds_rate',
+            'tsy_10yr_minus_cpi',
+            'real_med_family_income',
             'combanks_business_loans',
             'combanks_assets_tot',
             'mortage_debt_individuals',
             'real_estate_loans',
             'foreign_dir_invest',
-            # 'pers_savings_rt',
-            # 'gross_savings',
+            'pers_savings_rt',
+            'gross_savings',
             'tax_receipts_corp',
             'fed_funds_rate',
-            # 'gold_fix_3pm',
+            'gold_fix_3pm',
             'corp_profit_margins',
             'cape',
             'tobin_q',
@@ -1718,7 +1722,7 @@ if __name__ == '__main__':
             'mzm_usage',
             'm2_usage',
             'm1_usage',
-            # 'employment_pop_ratio',
+            'employment_pop_ratio',
             'nyse_margin_debt',
             'us_dollar_index',
             'nonfin_gross_val',
@@ -1762,15 +1766,18 @@ if __name__ == '__main__':
         for v in x_names:
             if use_vwma:
                 new_field_name = v + '_vwma'
-            else:
-                new_field_name = v + '_ewma'
-            if new_field_name not in df.columns.values:
-                if use_vwma:
+                if new_field_name not in df.columns.values:
                     df[new_field_name] = vwma(df[v], mean_alpha=ewm_alpha)
-                else:
+                    new_x_names.append(new_field_name)
+
+            if use_ewma:
+                new_field_name = v + '_ewma'
+                if new_field_name not in df.columns.values:
                     df[new_field_name] = df[v].ewm(alpha=ewm_alpha).mean()
-            new_x_names.append(new_field_name)
-        x_names = new_x_names
+                    new_x_names.append(new_field_name)
+
+        if len(new_x_names) > 0:
+            x_names = new_x_names
 
         ##########################################################################################################
         # Trim all x fields to a threshold, expressed in terms of Stdev

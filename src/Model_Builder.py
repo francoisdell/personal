@@ -727,7 +727,8 @@ class Model_Builder:
                     for name in df_probs.columns.values:
                         if name in df_validate.columns.values:
                             df_probs.rename(columns={name: name + '_final'}, inplace=True)
-                    df_validate = df_validate.join(df_probs, how='inner')
+                    # df_validate = df_validate.join(df_probs, how='inner')
+                    update_df_outer(df_validate, df_probs)
                 self.new_fields.extend(df_probs.columns.values.tolist())
 
             # print_sp500(self.df)
@@ -887,7 +888,7 @@ class Model_Builder:
             elif t == 'cat':
                 mkdict = lambda row: dict((col, row[col]) for col in [f])
                 matrix = trained_models[f].transform(df.apply(mkdict, axis=1))
-                for col_index, col_name in trained_models[f].get_feature_names():
+                for col_index, col_name in enumerate(trained_models[f].get_feature_names()):
                     transformed_field_name = f + '_' + col_name
                     df.loc[:, transformed_field_name] = matrix[:, col_index].astype(np.float64)
                     column_names[transformed_field_name] = {'use': True, 'orig_name': f}
