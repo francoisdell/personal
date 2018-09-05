@@ -7,7 +7,7 @@ from sklearn import preprocessing as sk_prep
 import sklearn
 
 
-def vwma(vals: pd.Series, mean_alpha: float = 0.125, verbose: bool = False):
+def vwma(vals: pd.Series, mean_alpha: float = 0.125, verbose: bool = False, inverse: bool=False):
     orig_idx = vals.index
     diff_vals = vals / vals.shift(1)
     if verbose:
@@ -19,18 +19,22 @@ def vwma(vals: pd.Series, mean_alpha: float = 0.125, verbose: bool = False):
     # if verbose:
     #     print(normal_vol_ewma)
     normal_vol_ewma = [v[0] for v in scaler_std.fit_transform(diff_vals.values.reshape(-1, 1))]
-    normal_vol_ewma = [logistic.cdf(v) for v in normal_vol_ewma]
+    if inverse:
+        normal_vol_ewma = [1 - logistic.cdf(v) for v in normal_vol_ewma]
+    else:
+        normal_vol_ewma = [logistic.cdf(v) for v in normal_vol_ewma]
+
     avg_ewm_factor = mean_alpha / 0.5
     alphas = [v * avg_ewm_factor for v in normal_vol_ewma]
     alphas = [mean_alpha] + alphas
     if verbose:
         print('Length of alphas list: ', len(alphas))
         print('Length of values list: ', len(vals))
-    final_data = pd.DataFrame(data=list(zip(vals, alphas)), columns=['vals', 'alpha'])
+    final_data = pd.DataFrame(data=list(zip(vals, alphas)), columns=['vals', 'alpha'], index=orig_idx)
     cume_alphas = None
     last_vwma = None
     for idx, val, alpha in final_data.itertuples():
-        if idx == 0:
+        if not cume_alphas:
             cume_alphas = mean_alpha
             vwma = val
         else:
@@ -50,7 +54,7 @@ def vwma(vals: pd.Series, mean_alpha: float = 0.125, verbose: bool = False):
         print(final_data.tail(10))
         print(len(final_data['vwma']))
 
-    final_data.set_index(orig_idx)
+    # final_data.set_index(orig_idx)
     return final_data['vwma']
 
 
@@ -63,5 +67,10 @@ for v in normdist_vals:
 
 # print(random_walk_vals)
 
-vwma(pd.Series(random_walk_vals), verbose=True)
+res = vwma(pd.Series(random_walk_vals), verbose=True)
 
+print(res)
+
+res = vwma(pd.Series(random_walk_vals), verbose=True, inverse=True)
+
+print(res)

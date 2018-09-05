@@ -3,7 +3,6 @@ import math
 import pickle
 import os
 from datetime import datetime, timedelta
-# import fancyimpute
 import matplotlib
 matplotlib.use('TkAgg')
 import numpy as np
@@ -15,9 +14,6 @@ import wbdata
 import bls
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 import operator
-# from matplotlib import rcParams
-# import yahoo_finance
-from joblib import Parallel, delayed
 import itertools
 from sklearn import feature_selection as sk_feat_sel
 from scipy.stats import logistic
@@ -37,9 +33,17 @@ import io
 from statsmodels.stats.outliers_influence import variance_inflation_factor
 import requests
 import importlib
+# import fancyimpute
+# from matplotlib import rcParams
+# import yahoo_finance
+# from joblib import Parallel, delayed
 
 
-def make_qtrly(s: pd.Series, t: str='mean') -> pd.Series:
+class WTFException(Exception):
+    pass
+
+
+def make_qtrly(s: pd.Series, t: str='first') -> pd.Series:
     s.index = pd.DatetimeIndex(s.index.values, dtype=datetime.date)
     s.index.freq = s.index.inferred_freq
 
@@ -69,6 +73,7 @@ def make_qtrly(s: pd.Series, t: str='mean') -> pd.Series:
 
     # print(s)
     return s
+
 
 def get_closes(d: list, fld_names: list=list(('Close', 'col3'))) -> pd.Series:
     index_list = []
@@ -142,7 +147,7 @@ def chart(d, ys, invert, log_scale, save_name=None, title=None):
             color = next(colors)
             lines.append(ax.plot(d[col], linestyle=ls, label=col, color=color))
             ax.set_ylabel(col,color=color)
-            #ax.tick_params(axis='y', colors=color)
+            # ax.tick_params(axis='y', colors=color)
             ax.spines['right'].set_color(color)
         else:
             for col in y:
@@ -252,19 +257,27 @@ def predict_returns(df: pd.DataFrame,
 
         mean_y_field_return = df[forward_y_field_name].mean()
 
+        index_vals = df.index.values()
+        index_future_vals = index_vals.shift(quarters_forward).values()
         for i in range(df.shape[0] - quarters_forward):
             df.ix[i + (quarters_forward), 'invest_strat_cash'] += df.ix[i, 'invest_strat_cash']
 
             if mean_y_field_return >= df.ix[i, 'tsy_10yr_yield']:
-                df.ix[i + (quarters_forward), 'invest_strat_basic'] += df.ix[i, 'invest_strat_basic'] * (1 + df.ix[
-                    i, forward_y_field_name]) ** quarters_forward
+                df.ix[i + (quarters_forward), 'invest_strat_basic'] += \
+                    df.ix[i, 'invest_strat_basic'] * \
+                    (1 + np.nan_to_num(df.ix[i, forward_y_field_name])) ** \
+                    quarters_forward
             else:
-                df.ix[i + (quarters_forward), 'invest_strat_basic'] += df.ix[i, 'invest_strat_basic'] * (1 + df.ix[
-                    i, 'tsy_10yr_yield']) ** quarters_forward
+                df.ix[i + (quarters_forward), 'invest_strat_basic'] += \
+                    df.ix[i, 'invest_strat_basic'] * \
+                    (1 + df.ix[i, 'tsy_10yr_yield']) ** \
+                    quarters_forward
 
             if df.ix[i, forward_y_field_name_pred] >= df.ix[i, 'tsy_10yr_yield']:
-                df.ix[i + (quarters_forward), 'invest_strat_mixed'] += df.ix[i, 'invest_strat_mixed'] * (1 + df.ix[
-                    i, forward_y_field_name]) ** quarters_forward
+                df.ix[i + (quarters_forward), 'invest_strat_mixed'] += \
+                    df.ix[i, 'invest_strat_mixed'] * \
+                    (1 + df.ix[i, forward_y_field_name]) ** \
+                    quarters_forward
             else:
                 df.ix[i + (quarters_forward), 'invest_strat_mixed'] += df.ix[i, 'invest_strat_mixed'] * (1 + df.ix[
                     i, 'tsy_10yr_yield']) ** quarters_forward
@@ -605,16 +618,19 @@ class data_source:
 
     def collect_data(self):
         global start_dt, end_dt
+
         if isfunction(self.provider):
             if self.code:
                 self.data = self.provider(self.code)
             else:
                 self.data = self.provider()
+
         elif self.provider == 'fred':
             fred = Fred(api_key_file='token_fred.txt')
             self.data = fred.get_series(self.code
                                         , observation_start=start_dt
                                         , observation_end=end_dt)
+
         elif self.provider == 'eod_hist':
             url = 'https://eodhistoricaldata.com/api/eod/{0}'.format(self.code)
             params = {'api_token': open('token_eodhist.txt', mode='r').read()}
@@ -631,10 +647,10 @@ class data_source:
                 raise Exception(r.status_code, r.reason, url)
 
         elif self.provider == 'schiller':
-            import csv
+            # import csv
             import io
-            import urllib.request
-            import bs4
+            # import urllib.request
+            # import bs4
             url = 'http://www.econ.yale.edu/~shiller/data/ie_data.xls'
             webpage = requests.get(url, stream=True)
             self.data = pd.read_excel(io.BytesIO(webpage.content), 'Data', header=7, skip_footer=1)
@@ -649,12 +665,14 @@ class data_source:
                                    , collapse="quarterly"
                                    , start_date=start_dt
                                    , end_date=end_dt)['Value']
+
         elif self.provider == 'bls':
             self.data = bls.get_series([self.code]
                                 , startyear=datetime.strptime(start_dt, '%Y-%m-%d').year
                                 , endyear=datetime.strptime(end_dt, '%Y-%m-%d').year
                                 , key=open('token_bls.txt', mode='r').read()
                                 )
+
         elif self.provider == 'worldbank':
             self.data = wbdata.get_data(self.code,
                                         country='US',
@@ -665,6 +683,7 @@ class data_source:
                                         keep_levels=False
                                    )
             print(self.data)
+
         print("Collected data for [{0}]".format(self.code))
 
 
@@ -942,34 +961,40 @@ def time_since_last_true(s: pd.Series) -> pd.Series:
     return s.astype(int)
 
 
-def vwma(vals: pd.Series, mean_alpha: float=0.125, verbose: bool=False):
+def vwma(vals: pd.Series, mean_alpha: float = 0.125, verbose: bool = False, inverse: bool=False):
     orig_idx = vals.index
     diff_vals = vals / vals.shift(1)
-    mean_diff = diff_vals.mean()
     if verbose:
         print(diff_vals)
         print(len(diff_vals))
-    diff_vals.fillna(mean_diff, inplace=True)
+    diff_vals.dropna(inplace=True)
     scaler_std = sk_prep.StandardScaler()
-    normal_vol_ewma = scaler_std.fit_transform(diff_vals.values.reshape(-1, 1))
-    normal_vol_ewma = [logistic.cdf(v[0]) for v in normal_vol_ewma]
-    avg_ewm_factor = mean_alpha/0.5
+    # normal_vol_ewma = vals.ewm(alpha=mean_alpha).std()
+    # if verbose:
+    #     print(normal_vol_ewma)
+    normal_vol_ewma = [v[0] for v in scaler_std.fit_transform(diff_vals.values.reshape(-1, 1))]
+    if inverse:
+        normal_vol_ewma = [1 - logistic.cdf(v) for v in normal_vol_ewma]
+    else:
+        normal_vol_ewma = [logistic.cdf(v) for v in normal_vol_ewma]
+
+    avg_ewm_factor = mean_alpha / 0.5
     alphas = [v * avg_ewm_factor for v in normal_vol_ewma]
     alphas = [mean_alpha] + alphas
     if verbose:
         print('Length of alphas list: ', len(alphas))
         print('Length of values list: ', len(vals))
-    final_data = pd.DataFrame(data=list(zip(vals, alphas)), columns=['vals', 'alpha'])
+    final_data = pd.DataFrame(data=list(zip(vals, alphas)), columns=['vals', 'alpha'], index=orig_idx)
     cume_alphas = None
     last_vwma = None
     for idx, val, alpha in final_data.itertuples():
-        if idx == 0:
+        if not cume_alphas:
             cume_alphas = mean_alpha
             vwma = val
         else:
-            cume_alphas += (alpha * (1-cume_alphas))
+            cume_alphas += (alpha * (1 - cume_alphas))
             adj_alpha = alpha / cume_alphas
-            vwma = (val * adj_alpha) + (last_vwma * (1-adj_alpha))
+            vwma = (val * adj_alpha) + (last_vwma * (1 - adj_alpha))
         final_data.at[idx, 'cume_alphas'] = cume_alphas
         final_data.at[idx, 'vwma'] = vwma
         last_vwma = vwma
@@ -983,9 +1008,7 @@ def vwma(vals: pd.Series, mean_alpha: float=0.125, verbose: bool=False):
         print(final_data.tail(10))
         print(len(final_data['vwma']))
 
-    final_data['vwma'] = final_data['vwma'].combine_first(vals/mean_diff)
-    final_data.set_index(orig_idx, inplace=True)
-    # print(final_data['vwma'])
+    # final_data.set_index(orig_idx)
     return final_data['vwma']
 
 
@@ -1327,8 +1350,8 @@ if __name__ == '__main__':
     returns_predict_quarters_forward = [40]
     recession_predict_quarters_forward = [6]
 
-    interaction_type = 'level_1'  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
-    correlation_type = True  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
+    interaction_type = None  # Specify whether to derive pairwise interaction variables. Options: all, level_1, None
+    correlation_type = None  # Specify whether to derive pairwise EWM-correlation variables. Options: level_1, None
     transform_vars = True  # For each x-variable, creates an additional squared and squared-root version too
     trim_stdevs = 4  # Trims outlier variables according to a certain number of standard deviations (0 for skip)
     calc_trend_values = True  # Add x-variables for time since the last rise, and time since the last fall
@@ -1336,7 +1359,7 @@ if __name__ == '__main__':
     calc_diff_from_trend_values = True
     diff_quarters = [6, 12, 18]
 
-    # If you want to remove variables that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
+    # If you want to remove vars that don't meet a certain significance level, set this < 1. Requiring 95% = 5.0e-2.
     mb_train_pct = 0.8  # Defines the train/test split
     mb_selection_limit = 0.1
     mb_correlation_max = 1  # 1 - ((1 - 0.9) * (1 - mb_train_pct))
@@ -1359,8 +1382,9 @@ if __name__ == '__main__':
     next_rec_field_name = recession_field_name + '_time_until_next'
     verbose = False
     ewm_alpha = 0.125  # Halflife for EWM calculations. 4.2655 corresponds to a 0.125 weight.
-    use_vwma = False
-    use_ewma = True
+    use_vwma = True
+    use_ivwma = True
+    use_ewma = False
     default_imputer = 'knnimpute'  # 'fancyimpute' or 'knnimpute'. knnimpute is generally much faster, if less ideal.
     stack_include_preds = False
     final_include_data = False
@@ -1424,13 +1448,13 @@ if __name__ == '__main__':
         else:
             initial_models = ['rfor_r', 'gbr', 'linreg', 'elastic_net', 'knn_r', 'svr']
             if (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
-                initial_models.extend(['gauss_proc_r'])
+                # initial_models.extend(['gauss_proc_r'])
                 if use_neural_nets:
                     initial_models.extend(['neural_r_2'])
 
-            final_models = ['elastic_net_stacking', 'linreg', 'svr', 'svr']
+            final_models = ['elastic_net_stacking', 'linreg', 'svr']
             if (not final_include_data) or (correlation_method is not None and max_correlation < 1.) or max_variables == 0:
-                final_models.extend(['gauss_proc_r'])
+                # final_models.extend(['gauss_proc_r'])
                 if use_neural_nets:
                     final_models.extend(['neural_r'])
 
@@ -1753,10 +1777,10 @@ if __name__ == '__main__':
         ##########################################################################################################
         # If even after imputation, some fields are empty, then you need to remove them
         ##########################################################################################################
-        # for n in x_names.copy():
-        #     if df[n].isnull().any():
-        #         print('Field [{0}] was still empty after imputation! Removing it!'.format(n))
-        #         x_names.remove(n)
+        for n in x_names.copy():
+            if df[n].isnull().any().any():
+                print('Field [{0}] was still empty after imputation! Removing it!'.format(n))
+                x_names.remove(n)
 
         ##########################################################################################################
         # Convert all x fields to EWMA/VWMA versions, to smooth craziness
@@ -1767,7 +1791,25 @@ if __name__ == '__main__':
             if use_vwma:
                 new_field_name = v + '_vwma'
                 if new_field_name not in df.columns.values:
-                    df[new_field_name] = vwma(df[v], mean_alpha=ewm_alpha)
+                    res = vwma(df[v], mean_alpha=ewm_alpha)
+                    if df[v].shape[0] != res.shape[0]:
+                        print('========== VWMA RESULTS ==========')
+                        print('Original: {rows}'.format(rows=df[v].shape))
+                        print('Returned: {rows}'.format(rows=res.shape))
+                        raise WTFException('THIS SHIT SHOULDN\'T HAPPEN')
+                    df[new_field_name] = res
+                    new_x_names.append(new_field_name)
+
+            if use_ivwma:
+                new_field_name = v + '_ivwma'
+                if new_field_name not in df.columns.values:
+                    res = vwma(df[v], mean_alpha=ewm_alpha, inverse=True)
+                    if df[v].shape[0] != res.shape[0]:
+                        print('========== VWMA RESULTS ==========')
+                        print('Original: {rows}'.format(rows=df[v].shape))
+                        print('Returned: {rows}'.format(rows=res.shape))
+                        raise WTFException('THIS SHIT SHOULDN\'T HAPPEN')
+                    df[new_field_name] = res
                     new_x_names.append(new_field_name)
 
             if use_ewma:
@@ -1878,17 +1920,52 @@ if __name__ == '__main__':
             print('X Names Length: {0}'.format(len(x_names)))
 
         if trend_x_names:
+            ##########################################################################################################
+            # Impute the trend_x_names fields
+            ##########################################################################################################
+            imputed_df, trend_x_names = impute_if_any_nulls(df[trend_x_names], imputer=default_imputer)
+            for n in trend_x_names:
+                df[n] = imputed_df[n]
+
+            ##########################################################################################################
+            # If even after imputation, some fields are empty, then you need to remove them
+            ##########################################################################################################
+            for n in trend_x_names.copy():
+                if df[n].isnull().any().any():
+                    print('Field [{0}] was still empty after imputation! Removing it!'.format(n))
+                    trend_x_names.remove(n)
+
             for v in trend_x_names:
                 if use_vwma:
                     new_field_name = v + '_vwma'
-                else:
-                    new_field_name = v + '_ewma'
-                if new_field_name not in df.columns.values:
-                    if use_vwma:
+                    if new_field_name not in df.columns.values:
                         df[new_field_name] = vwma(df[v], mean_alpha=ewm_alpha)
-                    else:
+                        x_names.append(new_field_name)
+
+                for v in trend_x_names:
+                    if use_ivwma:
+                        new_field_name = v + '_ivwma'
+                        if new_field_name not in df.columns.values:
+                            df[new_field_name] = vwma(df[v], mean_alpha=ewm_alpha, inverse=True)
+                            x_names.append(new_field_name)
+
+                if use_ewma:
+                    new_field_name = v + '_ewma'
+                    if new_field_name not in df.columns.values:
                         df[new_field_name] = df[v].ewm(alpha=ewm_alpha).mean()
-                x_names.append(new_field_name)
+                        x_names.append(new_field_name)
+
+                # if use_vwma:
+                #     new_field_name = v + '_vwma'
+                # else:
+                #     new_field_name = v + '_ewma'
+                # if new_field_name not in df.columns.values:
+                #     if use_vwma:
+                #         df[new_field_name] = vwma(df[v], mean_alpha=ewm_alpha)
+                #     else:
+                #         df[new_field_name] = df[v].ewm(alpha=ewm_alpha).mean()
+
+                # x_names.append(new_field_name)
             # IMPUTE VALUES!!!
             imputed_df, x_names = impute_if_any_nulls(df[x_names], imputer=default_imputer)
             for n in x_names:
@@ -1991,7 +2068,7 @@ if __name__ == '__main__':
             print('X Names Length: {0}'.format(len(x_names)))
 
     for n in x_names:
-        if df[n].isnull().any():
+        if df[n].isnull().any().any():
             msg = 'Field "{0}" has null value!!!!'.format(n)
             print(msg)
             raise ValueError(msg)

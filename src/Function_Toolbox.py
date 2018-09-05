@@ -17,7 +17,6 @@ from datetime import date
 import platform
 import subprocess
 import importlib
-import win32wnet
 from re import search as re_search
 
 global log
@@ -175,6 +174,7 @@ def control_dir(dir: str) -> str:
 
 
 def wnet_connect(fullpath, username, password):
+    import win32wnet
     netresource = win32wnet.NETRESOURCE()
     netresource.lpRemoteName = fullpath
     try:
