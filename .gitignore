@@ -1,0 +1,19 @@
+Analytics\ Reports/*
+.idea/*
+lib/*
+Data\ Files/*
+include/*
+Models/*
+.DS_Store
+.Python
+pip-selfcheck.json
+xgboost/
+Analytics Reports/
+bin/*
+*/*.pyc*
+*.txt
+src/.env
+*.env
+*/*.env
+*.iml
+*.xml

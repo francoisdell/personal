@@ -6,8 +6,8 @@ if os.path.abspath(os.pardir) not in sys.path:
     sys.path.append(os.path.abspath(os.pardir))
 
 # from PyInstaller import compat
-# mkldir = os.path.join(compat.base_prefix, "Library", "bin")
-# binaries = [(os.path.join(mkldir, mkl), '') for mkl in os.listdir(mkldir) if mkl.startswith('mkl_')]
+# mkldir = join(compat.base_prefix, "Library", "bin")
+# binaries = [(join(mkldir, mkl), '') for mkl in os.listdir(mkldir) if mkl.startswith('mkl_')]
 # if not mkldir in os.environ['PATH']:
 #         os.environ['PATH'] = mkldir + os.pathsep + os.environ['PATH']
 # for b in binaries:
@@ -17,15 +17,18 @@ if os.path.abspath(os.pardir) not in sys.path:
 from typing import Union
 from math import exp
 import math
+from os.path import join
 from Settings import Settings
 from collections import OrderedDict
 import numpy as np
-import prettytable
+import pprint
+from prettytable import PrettyTable
+import importlib
 import platform
 import pandas as pd
+from datetime import datetime as dt
 import pickle
 import bisect
-import decimal
 import Function_Toolbox as ft
 from scipy import sparse
 from sklearn import exceptions
@@ -52,15 +55,15 @@ from sklearn.naive_bayes import BernoulliNB, MultinomialNB
 from sklearn.neighbors import NearestCentroid
 from sklearn.svm import SVC, SVR, NuSVR, NuSVC
 from sklearn.metrics import r2_score
-# from xgboost import XGBClassifier, XGBRegressor
-from scipy.special import expit
-import skflow
-import tensorflow as tf
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+import xgboost
+from tensorflow.contrib.estimator.python.estimator.rnn import RNNClassifier, RNNEstimator
+from tensorflow.contrib.estimator import regression_head
 from numbers import Number
 from sklearn import metrics
-import warnings
 from statistics import mean
 import shutil
+import warnings
 
 pd.options.mode.chained_assignment = None
 # pd.set_option('display.height', 1000)
@@ -68,6 +71,10 @@ pd.set_option('display.width', shutil.get_terminal_size()[0])
 pd.set_option('display.max_rows', 500)
 pd.set_option('display.max_columns', 0)
 pd.set_option('display.max_colwidth', 100)
+warnings.filterwarnings(action="ignore")
+pandas_objects = (pd.DataFrame, pd.Series, pd.SparseDataFrame, pd.SparseSeries)
+pandas_series_objs = (pd.Series, pd.SparseSeries)
+pandas_dataframe_objs = (pd.DataFrame, pd.SparseDataFrame)
 
 
 class ModelSet:
@@ -126,7 +133,7 @@ class Model:
         return self.model_class + '_' + self.model_usage
 
 
-class Model_Builder:
+class ModelBuilder:
     def __init__(self,
                  df: pd.DataFrame,
                  x_fields: dict,
@@ -152,7 +159,8 @@ class Model_Builder:
                  correlation_max: float = 0.95,
                  correlation_significance_preference=True,
                  use_sparse: bool = True,
-                 codify_nulls: bool = True
+                 codify_nulls: bool = True,
+                 allow_multiprocessing: bool=True
                  ):
 
 
@@ -190,6 +198,7 @@ class Model_Builder:
         self.correlation_method = correlation_method
         self.correlation_max = correlation_max
         self.codify_nulls = codify_nulls
+        self.allow_multiprocessing = allow_multiprocessing
 
     def predict(self) -> (pd.DataFrame, str):
 
@@ -356,6 +365,14 @@ class Model_Builder:
 
             clf = model.trained_model
 
+            # Print Model Results and save to a file
+            model_outputs_dir = join(data_file_dir, f'{model.model_usage}_{model.model_class}')
+            os.makedirs(model_outputs_dir, exist_ok=True)
+            print_model_results(clf,
+                                self.df.loc[mask_train, list(x_columns.keys())],
+                                self.df.loc[mask_train, y_train_names],
+                                model_outputs_dir, self.selection_limit)
+
             max_slice_size = 100000
             y_all = list()
             mask_all = np.asarray([True for v in range(self.df.shape[0])], dtype=np.bool)
@@ -363,7 +380,7 @@ class Model_Builder:
             for s in range(0, int(math.ceil(len(self.df.index) / max_slice_size))):
                 min_idx = s * max_slice_size
                 max_idx = min(len(self.df.index), (s + 1) * max_slice_size)
-                print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
+                print(f"Prediction Iteration #{s}: min/max = {min_idx}/{max_idx}")
 
                 df_valid_iter = self.df.loc[mask_all, :].iloc[min_idx:max_idx]
                 x_valid_columns, x_all, x_mappings = self.get_vectors(df_valid_iter.loc[:, list(self.x_fields.keys())], self.x_fields, x_mappings)
@@ -420,7 +437,6 @@ class Model_Builder:
                 print('Unique predictions: ', len(np.unique(preds)))
 
             update_df_outer(self.df, df_pred)
-            # self.df = self.df.join(df_pred, how='inner')
 
             new_x_mappings = self.train_models(self.df.loc[mask_train, list(new_x_fields.keys())], new_x_fields)
             new_x_columns, new_x_column_df, new_x_mappings = \
@@ -443,13 +459,13 @@ class Model_Builder:
                 print('--- Model over-normalization testing ---\n'
                       'Intercept/Expit/Exp = {0} / {1} / {2}'
                       .format(format(clf.intercept_[0], '.4f')
-                              , format(expit(clf.intercept_[0]), '.4f')
+                              , format(ft.sigmoid(clf.intercept_[0]), '.4f')
                               , format(exp(clf.intercept_[0])), '.4f'))
 
         ##################################################
         # FINAL MODEL TRAINING AND PREDICTION GENERATION #
         ##################################################
-        for idx, model in enumerate(self.model_type.final_models):
+        for mdl in self.model_type.final_models:
 
             if self.model_type.initial_models:
 
@@ -464,150 +480,36 @@ class Model_Builder:
 
                 x_columns = self.reduce_dimensions(x_columns, k, mask_train)
 
-            # print_sp500(self.df)
+            mdl = self.train_predictive_model(mdl,
+                                              list(x_columns.keys()),
+                                              self.df.loc[mask_train, list(x_columns.keys())],
+                                              self.df.loc[mask_train, y_train_names])
 
-            model = self.train_predictive_model(model,
-                                                list(x_columns.keys()),
-                                                self.df.loc[mask_train, list(x_columns.keys())],
-                                                self.df.loc[mask_train, y_train_names])
-
-            clf = model.trained_model
+            clf = mdl.trained_model
             # If PCA has been specified, convert x_fields to PCA
             # if self.pca_explained_var < 1:
             #     self.df, x_columns = self.convert_to_pca(pca_df=self.df,
             #                                              col_names=list(x_columns.keys()),
             #                                              explained_variance=self.pca_explained_var)
 
+            model_outputs_dir = join(data_file_dir, f'{mdl.model_usage}_{mdl.model_class}')
+            os.makedirs(model_outputs_dir, exist_ok=True)
+
             # INITIAL AND FINAL MODELS: SHOW MODEL TESTS
             if self.show_model_tests:
                 print(ft.str_as_header('TEST SET APPLICATION'))
-                _, x_test_df, x_mappings = self.get_vectors(self.df.loc[mask_test, list(self.x_fields.keys())], self.x_fields, x_mappings)
-                _, y_test_df, y_mappings = self.get_vectors(self.df.loc[mask_test, list(self.y_field.keys())], self.y_field, y_mappings, is_y=True)
+                _, x_test_df, x_mappings = self.get_vectors(self.df.loc[mask_test, list(self.x_fields.keys())],
+                                                            self.x_fields, x_mappings)
+                _, y_test_df, y_mappings = self.get_vectors(self.df.loc[mask_test, list(self.y_field.keys())],
+                                                            self.y_field, y_mappings, is_y=True)
                 update_df_outer(self.df, x_test_df)
                 update_df_outer(self.df, y_test_df)
 
-                # print_sp500(self.df)
-
-                # if len(x_test.shape) == 1:
-                #     x_test = x_test.reshape(-1, 1)
-
                 print("Total Named Columns: {0}".format(len(x_columns)))
 
-                coef_list = [['name'] + [new_colname.strip() for new_colname in x_columns.keys()]]
-
-                if hasattr(clf, 'feature_importances_'):
-                    feat_importances = ['coef'] + fix_np_nan(clf.feature_importances_).tolist()
-                    print('Feature Importances:\n%s' % clf.feature_importances_, sep='\n')
-                    coef_list.append(feat_importances)
-
-                try:
-                    if hasattr(clf, 'coef_'):
-                        if isinstance(clf.coef_[0], (tuple, list, np.ndarray)):
-                            if clf.coef_.shape[0] == 1:
-                                coefs = fix_np_nan(clf.coef_[0])
-                            else:
-                                coefs = fix_np_nan([v[0] for v in clf.coef_])
-                        else:
-                            coefs = fix_np_nan([v for v in clf.coef_])
-                        if isinstance(coefs, (np.ndarray)):
-                            coefs = coefs.tolist()
-                        elif sparse.issparse(coefs):
-                            coefs = coefs.tolist()[-1].data
-                        print("Total Coefficients/Features:  ", len(coefs))
-                    else:
-                        raise ValueError('No coef_ or coefs_ attrubute in this model. Skipping.')
-
-                    if len(np.unique(y_test_df)) == 2:
-                        scores, p_vals = sk_feat_sel.f_classif(x_test_df, y_test_df)
-                    else:
-                        scores, p_vals = sk_feat_sel.f_regression(x_test_df, y_test_df, center=False)
-
-                    nonzero_coefs_mask = [v != 0 for v in coefs]
-                    significant_coefs_mask = [v <= self.selection_limit for v in p_vals]
-
-                    print_df = pd.DataFrame(list(zip([v[0] for v in x_columns],
-                                                     coefs,
-                                                     scores.tolist(),
-                                                     p_vals.tolist())),
-                                            columns=['Name', 'Coef', 'Score', 'P-Value'])
-
-                    print_df = print_df.loc[
-                               [v1 and v2 for v1, v2 in zip(nonzero_coefs_mask, significant_coefs_mask)], :]
-                    print_df.sort_values('Coef', ascending=True, inplace=True)
-
-                    with pd.option_context('display.max_rows', None, 'display.max_columns', None):
-                        print(print_df.to_string())
-                        # if nonzero_coefs_mask.value_counts().loc[True] <= 40:
-                        # nonzero_coefs_mask = nonzero_coefs_mask.values
-                        # print('==== Final Variables ====\n',
-                        #       np.asarray([v1 for v1, v2 in np.asarray(x_columns)[nonzero_coefs_mask]],
-                        #                  dtype=np.str).sort())
-                        #
-                        # print("==== Coefficients ====\n", np.asarray(np.asarray(coefs)[nonzero_coefs_mask]))
-                        #
-                        # print('==== Scores ====\n', scores[nonzero_coefs_mask])
-                        # print('==== P-Values ====\n', p_vals[nonzero_coefs_mask])
-
-                    if len(coefs) > 0:
-                        try:
-                            coefs = ['coefs'] + [v for v in coefs]
-                            coef_list.append(coefs)
-
-                            expit_coefs = ['coef_expit'] + [expit(float(v)) for v in coefs[1:]]
-                            coef_list.append(expit_coefs)
-
-                            exp_coefs = ['coef_exp'] + ['%f' % exp(float(v)) for v in coefs[1:]]
-                            coef_list.append(exp_coefs)
-                        except OverflowError:
-                            pass
-                except ValueError as e:
-                    print(e)
-                    pass
-
-                if len(np.unique(y_test_df)) == 2:
-                    scores, p_vals = sk_feat_sel.f_classif(x_test_df, y_test_df)
-                else:
-                    scores, p_vals = sk_feat_sel.f_regression(x_test_df, y_test_df, center=False)
-
-                value_mask_95 = [float(v) <= 0.05 for v in p_vals]
-
-                scores = ['scores'] + scores.tolist()
-                p_vals = ['p_values'] + p_vals.tolist()
-                coef_list.append(scores)
-                coef_list.append(p_vals)
-
-                coef_list = list(map(list, zip(*coef_list)))
-                for i, r in enumerate(coef_list[1:]):
-                    coef_list[i + 1] = [r[0]] + [round(float(v), 4) for v in r[1:]]
-
-                # value_mask_95 = [bool(x_columns[i][1]) and (float(v) <= 0.05) for i, v in enumerate(p_vals[1:])]
-
-                # print('PREDICTOR VARIABLES')
-                # print(coef_list)
-
-                pp2 = prettytable.PrettyTable(coef_list[0])
-                for i, r in enumerate(sorted(coef_list[1:], key=lambda x: x[-1], reverse=False)):
-                    if value_mask_95[i]:
-                        pp2.add_row(r)
-
-                # print('PREDICTOR VARIABLES SIGNIFICANT AT 95%')
-                # print(pp2.get_string())
-
-                # TRY TO SAVE THE COEFFICIENT LIST TO A FILE
-                try:
-                    all_coefs = pd.DataFrame(coef_list[1:], columns=coef_list[0])
-                    all_coefs.to_csv('%s/%s' % (data_file_dir, 'all_coefs.csv'), index=True,
-                                     index_label=['index1'], header=True, encoding='utf_8')
-                except PermissionError as e:
-                    print(e)
-                    pass
-
-                try:
-                    with open('%s/%s' % (data_file_dir, 'coef_info.txt'), mode='wt', encoding='utf_8') as f:
-                        f.writelines(pp2.get_string())
-                except UnicodeDecodeError as e:
-                    print(e)
-                    pass
+                # Print Model Results and save to a file
+                print_model_results(clf, x_test_df.loc[:, list(x_columns.keys())], y_test_df,
+                                    model_outputs_dir, self.selection_limit)
 
                 if hasattr(clf, 'intercept_'):
                     intercept = clf.intercept_
@@ -618,10 +520,10 @@ class Model_Builder:
                     print(*intercept, sep='\n')
 
                     print('INTERCEPT (EXPIT)')
-                    print(*[expit(v) for v in intercept], sep='\n')
+                    print(*[ft.sigmoid(v) for v in intercept], sep='\n')
 
                     print('INTERCEPT (EXP)')
-                    print(*[exp(v) for v in intercept], sep='\n')
+                    print(*[ft.sigmoid(v) for v in intercept], sep='\n')
 
                 preds, x_test_df = self.resilient_predict(clf, x_test_df.loc[:, list(x_columns.keys())])
                 print('R2 SCORE\n', r2_score(y_test_df, preds))
@@ -635,20 +537,21 @@ class Model_Builder:
                         if y_test_probs.shape[1] <= 2:
                             print('ROC-CURVE AOC', metrics.roc_auc_score(y_test_df, y_test_probs.loc[:, 1]))
 
-                        print("PREDICTION PROBABILITIES")
-                        print(y_test_probs)
+                        print(ft.str_as_header('PREDICTION PROBABILITIES', char='-', end_chars=3))
+                        print(f'Total Number of Classes: {y_test_probs.shape[1]}')
+                        print(f'=== Max Probability of each class ===\n{y_test_probs.aggregate(max, axis=0)}')
+                        print(f'=== Unique Probability Combinations ===\n{y_test_probs.nunique()}')
+                        print(f'=== Sample Prediction Values ===\n{y_test_probs.head(10)}')
                     except (ValueError, AttributeError) as e:
                         print(e)
                         pass
 
                     for k, v in self.y_field.items():
                         y_test_preds = self.resilient_inverse_transform(y_mappings[k], preds)
-                        # y_test_preds = y_test_preds.tolist()
 
-                        print("Unique integers in y_test: {0}".format(y_test_df.iloc[:,0].unique().tolist()))
+                        print("Unique integers in y_test: {0}".format(y_test_df.iloc[:, 0].unique().tolist()))
                         y_test_actual = self.resilient_inverse_transform(y_mappings[k], y_test_df)
-                        # y_test_actual = y_test_actual.T  # [0]
-                        # y_test_actual = np.ndarray([x[0] for x in y_test_actual.tolist()])
+
                         # Create confusion matrix
                         if y_test_actual.shape[1] != 1:
                             raise ValueError('Dataframe y_test_actual is not a 1d dataframe. Cannot use in a crosstab.')
@@ -656,10 +559,11 @@ class Model_Builder:
                             raise ValueError('Dataframe y_test_preds is not a 1d dataframe. Cannot use in a crosstab.')
                         y_test_actual = y_test_actual.T.squeeze()
                         y_test_preds = y_test_preds.T.squeeze()
-                        conf_matrix = pd.crosstab(y_test_actual.values, y_test_preds.values, rownames=['actual'], colnames=['predicted'])
+                        conf_matrix = pd.crosstab(y_test_actual.values, y_test_preds.values,
+                                                  rownames=['actual'], colnames=['predicted'])
                         print("CONFUSION MATRIX")
                         print(conf_matrix)
-                        conf_matrix.to_csv('%s/%s' % (data_file_dir, 'conf_matrix.csv'), header=True, encoding='utf_8')
+                        conf_matrix.to_csv(join(model_outputs_dir, 'conf_matrix.csv'), header=True, encoding='utf_8')
                 pass
 
             print("--------------------------------\n"
@@ -676,7 +580,7 @@ class Model_Builder:
             for s in range(0, int(math.ceil(len(df_validate.index) / max_slice_size))):
                 min_idx = s * max_slice_size
                 max_idx = min(len(df_validate.index), (s + 1) * max_slice_size)
-                print("Prediction Iteration #%s: min/max = %s/%s" % (s, min_idx, max_idx))
+                print("Prediction Iteration #{0}: min/max = {1}/{2}".format(s, min_idx, max_idx))
 
                 df_valid_iter = df_validate.iloc[min_idx:max_idx]
                 _, x_validate, x_mappings = self.get_vectors(df_valid_iter, self.x_fields, x_mappings)
@@ -714,12 +618,12 @@ class Model_Builder:
             self.new_fields = list()
             if calculate_probs:
                 print('ORIGINAL PROBABILITIES')
-                print(*y_validate_probs[:10].round(4), sep='\n')
+                print(*y_validate_probs[:10].round(6), sep='\n')
                 print('ORIGINAL PROBABILITIES (NORMALIZED)')
                 print(*[np.around(np.expm1(x), 4) for x in y_validate_probs][:10], sep='\n')
 
                 for y_name, mapping in y_mappings.items():
-                    df_probs = pd.DataFrame(data=y_validate_probs.round(4),
+                    df_probs = pd.DataFrame(data=y_validate_probs.round(6),
                                             columns=[y_name + '_prob_' + f.lower().replace(' ', '_') for f in
                                                      list(mapping.classes_)[:y_validate_probs.shape[1]]],
                                             index=df_validate.index)
@@ -752,10 +656,15 @@ class Model_Builder:
             # else:
             #     return_df = self.df.loc[mask_validate == 0, :].append(df_validate, ignore_index=True)
 
+            print('===== Appending the validation data to the final dataframe =====')
+            print("Shape Before:", self.df.shape)
             update_df_outer(self.df, df_validate)
+            print("Shape After:", self.df.shape)
+            if self.df is None:
+                raise ValueError('DF is None!!1!')
             # print_sp500(self.df)
 
-            yield self.df, model.model_class
+            yield mdl
 
         # INITIAL AND FINAL MODELS: TRAIN ANY UNTRAINED MODELS
         if self.verbose:
@@ -819,7 +728,7 @@ class Model_Builder:
                 scores, p_vals = sk_feat_sel.f_regression(self.df.loc[mask, x_column_names], self.df.loc[mask, y_column_names])
 
             # remaining_fields = set()
-            for idx, col_name in reverse_enumerate(x_column_names):
+            for idx, col_name in ft.reverse_enumerate(x_column_names):
                 if p_vals[idx] > self.selection_limit:
                     x_columns.pop(col_name)
                     print('Column [{0}] not found to be statistically significant. Removing.'.format(col_name))
@@ -833,7 +742,7 @@ class Model_Builder:
                     trained_models: dict,
                     is_y: bool = False
                     ) -> (dict,
-                          Union[pd.DataFrame, pd.SparseDataFrame, pd.Series, pd.SparseSeries],
+                          Union[pandas_objects],
                           OrderedDict):
 
         df = df.loc[:, list(field_names.keys())]
@@ -863,9 +772,9 @@ class Model_Builder:
                         break
                     except (ValueError, AttributeError) as e:
                         print("\nAll Uniques in Series:\n", sorted(df[f].unique().astype(str)))
-                        print('Length: %s\n' % len(df[f].unique().astype(str)))
-                        print("All Classes in Trained Models[{0}]\n".format(f), sorted(trained_models[f].classes_.tolist()))
-                        print('Length: %s\n' % len(trained_models[f].classes_.tolist()))
+                        print('Length: {}\n'.format(len(df[f].unique().astype(str))))
+                        print("All Classes in Trained Models[{0}]{1}".format(f, sorted(trained_models[f].classes_.tolist())))
+                        print('Length: {}\n'.format(len(trained_models[f].classes_.tolist())))
                         print(str(e))
                         new_classes = [v for k, v in enumerate(str(e).split("\'")) if k % 2 == 1]
                         le_classes = trained_models[f].classes_
@@ -880,9 +789,9 @@ class Model_Builder:
                             bisect.insort_left(le_classes, v)
                         trained_models[f].classes_ = le_classes
                         # trained_models[f].classes_ = np.append(trained_models[f].classes_, new_classes)
-                        print('Added new classes to encoder: %s ' % new_classes)
-                        print('All Classes: %s' % sorted(trained_models[f].classes_))
-                        print('Length: %s' % len(trained_models[f].classes_))
+                        print(f'Added new classes to encoder: {new_classes} ')
+                        print(f'All Classes: {sorted(trained_models[f].classes_)}')
+                        print(f'Length: {len(trained_models[f].classes_)}')
                         pass
 
             elif t == 'cat':
@@ -906,7 +815,7 @@ class Model_Builder:
                 elif t == 'num':
                     df[transformed_field_name] = trained_models[f].transform(df[f]
                                                                              .apply(pd.to_numeric, errors='coerce')
-                                                                             .round(3).fillna(0).values.reshape(-1, 1))
+                                                                             .round(6).fillna(0).values.reshape(-1, 1))
                     if is_y:
                         df[transformed_field_name] = df[transformed_field_name].astype(np.float16)  # Orig was float64
 
@@ -931,10 +840,10 @@ class Model_Builder:
         return column_names, df, trained_models
 
     def convert_to_pca(self,
-                       pca_df: Union[pd.DataFrame, pd.SparseDataFrame],
+                       pca_df: Union[pandas_dataframe_objs],
                        col_names: list,
                        explained_variance: float
-                       ) -> (Union[pd.DataFrame, pd.SparseDataFrame], Union[dict, OrderedDict]):
+                       ) -> (Union[pandas_dataframe_objs], Union[dict, OrderedDict]):
 
         print("Conducting PCA and pruning components above the desired explained variance ratio")
         max_components = len(col_names) - 1
@@ -957,11 +866,13 @@ class Model_Builder:
 
     def resilient_fit(self,
                       obj,
-                      x: Union[pd.DataFrame, pd.SparseDataFrame],
-                      y: Union[pd.Series, pd.SparseSeries]) \
+                      x: Union[pandas_dataframe_objs],
+                      y: Union[pandas_series_objs]) \
             -> GridSearchCV:
         try:
-            # y = y.values.reshape(-1, 1)
+            if isinstance(y, pandas_objects):
+                y = y.squeeze()
+                y = y.ravel()  # Turns the DF
             obj.fit(x, y)
         except (TypeError, ValueError, DeprecationWarning) as e:
             if 'Expected 2D' in str(e) and len(x.shape) == 1:
@@ -1049,7 +960,7 @@ class Model_Builder:
 
     def resilient_inverse_transform(self,
                                     model: sk_prep.LabelEncoder,
-                                    preds: Union[pd.Series, pd.SparseSeries]) \
+                                    preds: Union[pandas_series_objs]) \
             -> pd.DataFrame:
         try:
             preds_str = model.inverse_transform(preds.astype(int))
@@ -1065,8 +976,8 @@ class Model_Builder:
     def train_predictive_model(self,
                                model: Model,
                                x_columns: list,
-                               x_train: Union[pd.DataFrame, pd.SparseDataFrame],
-                               y_train: Union[pd.DataFrame, pd.SparseDataFrame]):
+                               x_train: Union[pandas_dataframe_objs],
+                               y_train: Union[pandas_dataframe_objs]) -> Model:
         if model.is_custom:
             if hasattr(model.model_class, 'fit'):
                 clf = model.model_class
@@ -1083,7 +994,7 @@ class Model_Builder:
             elif model.model_class == 'etree_c':
                 clf = ExtraTreesClassifier()
             elif model.model_class == 'logit':
-                clf = LogisticRegression()
+                clf = LogisticRegression(solver='lbfgs')
             elif model.model_class == 'linreg':
                 clf = LinearRegression()
             elif model.model_class == 'ridge_r':
@@ -1130,18 +1041,22 @@ class Model_Builder:
                 clf.hidden_layer_sizes = layer_sizes
             elif model.model_class == 'rnn_c':
                 rnn_size = 3
-                x_levels = len(x_columns)
-                clf = skflow.TensorFlowRNNClassifier(rnn_size=rnn_size, n_classes=15, cell_type='gru',
-                                                     input_op_fn=lambda x: tf.split(1, x_levels, x), num_layers=1,
-                                                     bidirectional=False, sequence_length=None, steps=1000,
-                                                     optimizer='Adam', learning_rate=0.01, continue_training=True)
+                # x_levels = len(x_columns)
+                clf = RNNClassifier(len(x_columns))
+
+                # clf = RNNClassifier(rnn_size=rnn_size, n_classes=15, cell_type='gru',
+                #                                      input_op_fn=ft.skflow_rnn_input_fn, num_layers=1,
+                #                                      bidirectional=False, sequence_length=None, steps=1000,
+                #                                      optimizer='Adam', learning_rate=0.01, continue_training=True)
             elif model.model_class == 'rnn_r':
                 rnn_size = 3
-                x_levels = len(x_columns)
-                clf = skflow.TensorFlowRNNRegressor(rnn_size=rnn_size, n_classes=15, cell_type='gru',
-                                                    input_op_fn=lambda x: tf.split(int(1), x_levels, x), num_layers=1,
-                                                    bidirectional=False, sequence_length=None, steps=1000,
-                                                    optimizer='Adam', learning_rate=0.01, continue_training=True)
+                # x_levels = len(x_columns)
+                clf = RNNEstimator(regression_head(), len(x_columns))
+
+                # clf = RNNEstimator(rnn_size=rnn_size, n_classes=15, cell_type='gru',
+                #                                     input_op_fn=ft.skflow_rnn_input_fn, num_layers=1,
+                #                                     bidirectional=False, sequence_length=None, steps=1000,
+                #                                     optimizer='Adam', learning_rate=0.01, continue_training=True)
             elif model.model_class == 'svc':
                 clf = SVC()
             elif model.model_class == 'svr':
@@ -1178,16 +1093,18 @@ class Model_Builder:
                 clf = MultinomialNB()
             elif model.model_class == 'nearest_centroid':
                 clf = NearestCentroid()
-            # elif model.model_class == 'xgb_r':
-            #     clf = XGBRegressor()
-            # elif model.model_class == 'xgb_c':
-            #     clf = XGBClassifier()
+            elif model.model_class == 'xgb_r':
+                clf = xgboost.XGBRegressor()
+            elif model.model_class == 'xgb_c':
+                clf = xgboost.XGBClassifier()
             else:
-                raise ValueError('Incorrect model_type given. Cannot match [%s] to a model.' % model.model_class)
+                raise ValueError(f'Incorrect model_type given. Cannot match [{model.model_class}] to a model.')
 
             if 'max_iter' in clf.get_params().keys():
-                if (not clf.max_iter) or (clf.max_iter < 10000):
-                    clf.max_iter = 10000
+                if isinstance(clf, (MLPClassifier, MLPRegressor, LogisticRegression)):
+                    clf.max_iter = int(10e5)  # AKA 100 Thousand
+                else:
+                    clf.max_iter = int(10e7)  # AKA 10 Million
 
         if isinstance(clf, (GradientBoostingRegressor, GradientBoostingClassifier,
                             KNeighborsClassifier, KNeighborsRegressor, SVR, SVC
@@ -1195,10 +1112,6 @@ class Model_Builder:
             self.use_sparse = False
             if isinstance(x_train, pd.SparseDataFrame):
                 x_train = x_train.to_dense()
-            # if not isinstance(x_train, (np.ndarray)):
-            #     x_train = x_train.values
-            # if not isinstance(y_train, (np.ndarray)):
-            #     y_train = y_train.toarray().reshape(-1, 1)
 
         if 'random_state' in clf.get_params().keys():
             clf.random_state = 555
@@ -1238,14 +1151,14 @@ class Model_Builder:
                 clf.bootstrap = True
 
             # HIDDEN LAYER SIZES
-            if 'hidden_layer_sizes' in clf.get_params().keys():
-                clf.hidden_layer_sizes = (int(len(x_columns) / 2),)
+            # if 'hidden_layer_sizes' in clf.get_params().keys():
+            #     clf.hidden_layer_sizes = (int(len(x_columns) / 2),)
 
             # ALPHAS
             if 'alpha' in clf.get_params().keys():
-                if isinstance(clf, (GradientBoostingRegressor)):
+                if isinstance(clf, GradientBoostingRegressor):
                     vals = [1e-10, 0.0001, 0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999, 0.9999, 1 - 1e-10]
-                elif isinstance(clf, (RidgeClassifier)):
+                elif isinstance(clf, RidgeClassifier):
                     vals = [0.001, 0.01, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999]
                     # vals = [1]
                 elif isinstance(clf, (GaussianProcessClassifier, GaussianProcessRegressor)) \
@@ -1290,10 +1203,13 @@ class Model_Builder:
                 elif isinstance(clf, (PassiveAggressiveRegressor)):
                     grid_param_dict['loss'] = ['epsilon_insensitive', 'squared_epsilon_insensitive']
                 elif isinstance(clf, (SGDClassifier, SGDRegressor)):
-                    grid_param_dict['loss'] = ['squared_loss', 'huber', 'epsilon_insensitive'
-                        , 'squared_epsilon_insensitive']
+                    grid_param_dict['loss'] = ['squared_loss', 'huber', 'epsilon_insensitive',
+                                               'squared_epsilon_insensitive']
                 else:
-                    grid_param_dict['loss'] = clf._SUPPORTED_LOSS
+                    try:
+                        grid_param_dict['loss'] = clf._SUPPORTED_LOSS
+                    except:
+                        pass
 
             # LOSSES
             if 'penalty' in clf.get_params().keys():
@@ -1322,8 +1238,8 @@ class Model_Builder:
                 if isinstance(clf, (GaussianProcessRegressor, GaussianProcessClassifier)):
                     grid_param_dict['kernel'] = [RBF(), RationalQuadratic(), WhiteKernel(), ConstantKernel()]
                 elif isinstance(clf, (SVC, SVR)):
-                    grid_param_dict['kernel'] = ['linear', 'poly', 'rbf',
-                                                 'sigmoid']  # LINEAR IS 'Work in progress.' as of 0.19
+                    # LINEAR IS 'Work in progress.' as of 0.19
+                    grid_param_dict['kernel'] = ['poly', 'rbf', 'sigmoid']  # Removed 'linear'
                 else:
                     print('Unspecified parameter "kernel" for ', type(clf))
 
@@ -1348,25 +1264,33 @@ class Model_Builder:
                     if not self.cross_val_model:
                         if hasattr(clf, 'classes_'):
                             self.cross_val_model = RepeatedStratifiedKFold(n_splits=self.cross_val_iters[0],
-                                                                      n_repeats=self.cross_val_iters[1],
-                                                                      random_state=555)
+                                                                           n_repeats=self.cross_val_iters[1],
+                                                                           random_state=555)
                         else:
                             self.cross_val_model = RepeatedKFold(n_splits=self.cross_val_iters[0],
-                                                            n_repeats=self.cross_val_iters[1],
-                                                            random_state=555)
-
-                    if 'windows' in platform.system().lower():  # or isinstance(clf,(MLPClassifier, MLPRegressor)):
-                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=self.cross_val_model)
-                    else:
-                        grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=self.cross_val_model,
-                                            n_jobs=-1)
+                                                                 n_repeats=self.cross_val_iters[1],
+                                                                 random_state=555)
 
                     if self.retrain_model and \
                             (model.trained_model is not None) and \
                             (np.testing.assert_equal(model.grid_param_dict, grid_param_dict) is None) and \
                             (model.x_columns == x_columns):
+
                         clf = model.trained_model
+                        grid_param_dict = {}
+
+                    elif isinstance(clf, (RNNEstimator, RNNClassifier)):
+
+                        clf = self.resilient_fit(clf, x_train.astype(float), y_train.astype(float))
+                        grid_param_dict = {}
+
                     else:
+
+                        if 'windows' in platform.system().lower():  # or isinstance(clf,(MLPClassifier, MLPRegressor)):
+                            grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=self.cross_val_model)
+                        else:
+                            grid = GridSearchCV(estimator=clf, param_grid=grid_param_dict, cv=self.cross_val_model,
+                                                n_jobs=-1 if self.allow_multiprocessing else 1)
 
                         grid = self.resilient_fit(grid, x_train.astype(float), y_train.astype(float))
 
@@ -1375,21 +1299,23 @@ class Model_Builder:
                         print('Grid Regression Best Score:', grid.best_score_)
                         print('Grid Regression Best Estimator:', grid.best_estimator_)
                         clf = grid.best_estimator_
-                        if clf is not None:
-                            model.trained_model = clf
-                            model.grid_param_dict = grid_param_dict
-                            model.x_columns = x_columns
-                            for k, v in grid.cv_results_.items():
-                                if isinstance(v, (list, np.ndarray)) and all(
-                                        [isinstance(v1, (float, complex, int, Number)) for v1 in v]):
-                                    v = mean(v)
-                                print('{0}\t: {1}'.format(k, v))
-                        else:
-                            raise ValueError('Grid CV Regression of model [{0}] did not produce a best estimator'
-                                             .format(model))
+
+                        for k, v in grid.cv_results_.items():
+                            if isinstance(v, (list, np.ndarray)) and all(
+                                    [isinstance(v1, (float, complex, int, Number)) for v1 in v]):
+                                v = mean(v)
+                            print('{0}\t: {1}'.format(k, v))
+
+                    if clf is not None:
+                        model.trained_model = clf
+                        model.grid_param_dict = grid_param_dict
+                        model.x_columns = x_columns
+
+                    else:
+                        raise ValueError('GridSearchCV of model [{0}] did not produce a best estimator'.format(model))
                     break
 
-                except (ValueError) as e:
+                except ValueError as e:
                     if 'Invalid parameter ' in str(e):
                         grid_param_dict.pop(str(e).split(' ')[2])
                         pass
@@ -1437,15 +1363,15 @@ class Model_Builder:
                 # print("Feature Names for TF/IDF Vectorizer\n", *[v.encode('ascii', errors='ignore')
                 #       .decode('utf-8', errors='ignore') for v in vectorizer.get_feature_names()])
 
-            elif t == 'num':
+            elif t in 'num':
                 if self.use_sparse:
                     vectorizer = sk_prep.MaxAbsScaler()
                     # vectorizer = sk_prep.StandardScaler(with_mean=False)
                 else:
                     vectorizer = sk_prep.StandardScaler()
                     # vectorizer = sk_prep.MinMaxScaler()
-                vectorizer.fit(
-                    df[f].apply(pd.to_numeric, errors='coerce').fillna(0).values.astype(np.float64).reshape(-1, 1))
+                vectorizer.fit(df[f].apply(pd.to_numeric, errors='coerce').fillna(0)
+                               .values.astype(np.float64).reshape(-1, 1))
 
             elif t == 'num_noscale':
                 vectorizer = None
@@ -1455,136 +1381,6 @@ class Model_Builder:
             trained_models[f] = vectorizer
 
         return trained_models
-
-    # def get_vectors(self,
-    #                 df: pd.DataFrame,
-    #                 field_names: dict,
-    #                 trained_models: dict,
-    #                 is_y: bool = False
-    #                 ):
-    #
-    #     final_matrix = None
-    #     column_names = list()
-    #     for f, t in list(field_names.items()):
-    #         if self.verbose:
-    #             print("TRANSFORMING: ", f, end='')
-    #         transformed_field_name = f + '_t'
-    #         if self.codify_nulls:
-    #             null_field_name = f + '_isnull'
-    #             df[f + '_isnull'] = df[f].isnull().values.astype(np.float64).reshape(-1, 1)
-    #             if self.use_sparse:
-    #                 null_matrix = sparse.csc_matrix(df[f + '_isnull'], dtype=np.float64)
-    #             else:
-    #                 null_matrix = df[null_field_name]
-    #
-    #
-    #             null_matrix = null_matrix.astype(np.float64)
-    #
-    #         # print(trained_models[f])
-    #         if isinstance(trained_models[f], sk_prep.LabelEncoder):
-    #             while 1:
-    #                 try:
-    #                     matrix = trained_models[f].transform(df[f].values.astype(str).transpose())
-    #                     break
-    #                 except ValueError as e:
-    #                     print("\nAll Uniques in Series:", sorted(df[f].unique().astype(str)))
-    #                     print('Length: %s' % len(df[f].unique().astype(str)))
-    #
-    #                     # print(str(e).split("\'"))
-    #                     # for k, v in enumerate(str(e).split("\'")):
-    #                     #     if k % 2 == 1:
-    #                     #         trained_models[f].classes_ = np.append(trained_models[f].classes_, v)
-    #                     print(str(e))
-    #                     new_classes = [v for k, v in enumerate(str(e).split("\'")) if k % 2 == 1]
-    #                     le_classes = trained_models[f].classes_
-    #                     if isinstance(le_classes, np.ndarray):
-    #                         le_classes = le_classes.tolist()
-    #                         for v in le_classes:
-    #                             if isinstance(v, (list, tuple)):
-    #                                 le_classes = v
-    #                                 print('Extracted values from ndarray: ', le_classes)
-    #                                 break
-    #                     for v in new_classes:
-    #                         bisect.insort_left(le_classes, v)
-    #                     trained_models[f].classes_ = le_classes
-    #                     # trained_models[f].classes_ = np.append(trained_models[f].classes_, new_classes)
-    #                     print('Added new classes to encoder: %s ' % new_classes)
-    #                     print('All Classes: %s' % sorted(trained_models[f].classes_))
-    #                     print('Length: %s' % len(trained_models[f].classes_))
-    #                     pass
-    #
-    #         elif t == 'cat':
-    #             mkdict = lambda row: dict((col, row[col]) for col in [f])
-    #             matrix = trained_models[f].transform(df.apply(mkdict, axis=1)).transpose()
-    #             for v in trained_models[f].get_feature_names():
-    #                 # final_matrix[v] = matrix
-    #                 # final_matrix = matrix
-    #                 column_names.append((v, True, f))
-    #
-    #         else:
-    #             if t == 'doc':
-    #                 matrix = trained_models[f].transform(df[f].values.astype(str)).transpose()
-    #                 for v in trained_models[f].get_feature_names():
-    #                     # Change to false if you want to eliminate the (MANY) possible words
-    #                     column_names.append((v.encode('ascii', errors='ignore').decode('utf-8', errors='ignore'), True, f))
-    #
-    #             # else:
-    #             elif t == 'num':
-    #                 df[transformed_field_name] = trained_models[f].transform(df[f]
-    #                                                                          .apply(pd.to_numeric, errors='coerce')
-    #                                                                          .round(3).fillna(0).values.reshape(-1, 1))
-    #                 if is_y:
-    #                     matrix = df[transformed_field_name].astype(
-    #                         np.float16).values.transpose()  # Original was float64
-    #
-    #                     if isinstance(trained_models[f], sk_prep.MinMaxScaler):
-    #                         matrix = np.minimum(1, np.maximum(0, fix_np_nan(matrix)))
-    #
-    #                         # matrix.data = np.minimum(1, np.maximum(0, fix_np_nan(matrix)))
-    #                 else:
-    #
-    #                     matrix = df[transformed_field_name].astype(np.float64).values
-    #                     if isinstance(trained_models[f], sk_prep.MinMaxScaler):
-    #                         matrix = np.minimum(1, np.maximum(0, fix_np_nan(matrix)))
-    #                     column_names.append((transformed_field_name, True, f))
-    #
-    #             else:
-    #                 raise ValueError('Type provided [(0}] for field [{1}] is not supported.'.format(t, f))
-    #
-    #             if self.use_sparse and not is_y:
-    #                 matrix = sparse.csc_matrix(matrix, dtype=np.float64)
-    #
-    #             if self.codify_nulls:
-    #                 if final_matrix is not None:
-    #                     final_matrix = self.matrix_vstack((final_matrix, null_matrix))
-    #                     # final_matrix[null_field_name] = null_matrix
-    #                 else:
-    #                     final_matrix = null_matrix
-    #                 # matrix = self.matrix_vstack((matrix, null_matrix))
-    #                 column_names.append((null_field_name, True, f))
-    #
-    #         if self.verbose:
-    #             print(' || Shape: {0}'.format(matrix.shape))
-    #         if final_matrix is not None:
-    #             if is_y:
-    #                 # final_matrix.append(matrix)
-    #                 final_matrix = matrix
-    #             else:
-    #                 final_matrix = self.matrix_vstack((final_matrix, matrix))
-    #
-    #         else:
-    #             final_matrix = matrix
-    #     else:
-    #         if not is_y:
-    #             if self.use_sparse:
-    #                 final_matrix = sparse.csr_matrix(final_matrix)
-    #             elif len(final_matrix.shape) == 1:
-    #                 final_matrix.values.reshape(-1, 1)
-    #             final_matrix = final_matrix.transpose()
-    #
-    #         # if final_matrix.shape[0] > 244:
-    #         #     lol = 1
-    #         return column_names, final_matrix, trained_models
 
     def matrix_vstack(self, m: tuple, return_sparse: bool = None):
         if sum([sparse.issparse(d) for d in list(m)]) == 1:
@@ -1624,8 +1420,8 @@ class Model_Builder:
         return m
 
 
-def fix_np_nan(m: Union[pd.DataFrame, pd.SparseDataFrame, list]) -> Union[pd.DataFrame, pd.SparseDataFrame, np.ndarray]:
-    if isinstance(m, (pd.DataFrame, pd.SparseDataFrame)):
+def fix_np_nan(m: Union[pandas_dataframe_objs + (list,)]) -> Union[pandas_dataframe_objs + (np.ndarray,)]:
+    if isinstance(m, pandas_dataframe_objs):
         m.loc[:, :] = np.nan_to_num(m.values)
     elif sparse.issparse(m):
         m.data = np.nan_to_num(m.data)
@@ -1663,7 +1459,7 @@ def print_sp500(df: pd.DataFrame):
         raise ValueError('SP500 column not found in DF')
 
 
-def update_df_outer(first: Union[pd.DataFrame, pd.SparseDataFrame], other: Union[pd.DataFrame, pd.SparseDataFrame]):
+def update_df_outer(first: Union[pandas_dataframe_objs], other: Union[pandas_dataframe_objs]):
     for c in other.columns.tolist():
         if c not in first.columns.tolist():
             first[c] = np.NaN
@@ -1678,11 +1474,6 @@ def update_df_outer(first: Union[pd.DataFrame, pd.SparseDataFrame], other: Union
     # print('Original Size: [This DF - {0}] [Other DF - {1}]'.format(first.shape, other.shape))
     first.update(other)
     # print('New Size: [This DF - {0}]'.format(first.shape))
-
-
-def reverse_enumerate(l):
-    for index in reversed(range(len(l))):
-        yield index, l[index]
 
 
 def get_decimals(vals: np.ndarray):
@@ -1725,20 +1516,6 @@ def reduce_variance_corr(df: pd.DataFrame, x_column_names: list, y_column_names:
             else:
                 drop_cols.add(v)
 
-    #     max_corr = corr_matrix.iloc[i, (i + 1):].max()
-    #     max = -1.
-    #     for i2, v2 in enumerate(x_fields[1:]):
-    #         if corr_matrix.iloc[i, i2].value >
-    #     max_corr = corr_matrix.iloc[i, (i+1):].max()
-    #     if max_corr >= max_corr_val:
-    #         drop_cols.add(v)
-    #
-    # # Iterates through Correlation Matrix Table to find correlated columns
-    # for i, v in enumerate(x_fields[:-1]):
-    #     max_corr = corr_matrix.iloc[i, (i+1):].max()
-    #     if max_corr >= max_corr_val:
-    #         drop_cols.add(v)
-
     x_column_names = [v for v in x_column_names if v not in list(drop_cols)]
     print('=== Drop of Highly-Correlated Variables is Complete ===')
     print('Dropped Fields [{0}]: {1}'.format(len(drop_cols), list(drop_cols)))
@@ -1775,3 +1552,195 @@ def reduce_variance_pca(df: pd.DataFrame, column_names: list, explained_variance
     print('Number of PCA Fields: {0}'.format(len(final_pca_columns)))
     print('PCA Fields: {0}'.format(final_pca_columns))
     return df, final_pca_columns
+
+
+def reduce_vars_corr(df: pd.DataFrame, field_names: list, max_num: float):
+    num_vars = len(field_names)-1
+    print('Current vars:  {0}'.format(num_vars))
+    if not max_num or max_num < 1:
+        if max_num == 0:
+            max_num = 0.5
+        max_num = int(df.shape[0]**max_num)
+
+    print('Max allowed vars: {0}'.format(max_num))
+
+    if num_vars > max_num:
+
+        if df.isnull().any().any():
+            imputed_df, field_names = ft.impute_if_any_nulls(df.loc[:, field_names].astype(float))
+            for n in field_names:
+                df[n] = imputed_df[n]
+        # Creates Correlation Matrix
+        corr_matrix = df.loc[:, field_names].corr()
+
+        max_corr = [(fld, corr_matrix.iloc[i+1, :i].max()) for i, fld in ft.reverse_enumerate(field_names[1:])]
+        max_corr.sort(key=lambda tup: tup[1])
+
+        return_x_vals = [fld for fld, corr in max_corr[:max_num]]
+        print('Number of Remaining Fields: {0}'.format(len(return_x_vals)))
+        print('Remaining Fields: {0}'.format(return_x_vals))
+        return df, return_x_vals
+
+    return df, field_names
+
+
+def reduce_vars_pca(df: pd.DataFrame, field_names: list, max_num: Union[int,float]=None):
+    num_vars = len(field_names)-1
+    print('Current vars: {0}'.format(num_vars))
+    if not max_num or max_num == 0:
+        max_num = int(df.shape[0]**0.5)
+
+    print('Max allowed vars: {0}'.format(max_num))
+
+    if num_vars > max_num:
+        print("Conducting PCA and pruning components above the desired explained variance ratio")
+        pca_model = TruncatedSVD(n_components=max_num, random_state=555)
+
+        x_names_pca = []
+        x_results = pca_model.fit_transform(df.loc[:, field_names]).T
+        # print(pca_model.components_)
+        print('PCA explained variance ratios.')
+        print(pca_model.explained_variance_ratio_)
+
+        sum_variance = 0
+        for idx, var in enumerate(pca_model.explained_variance_ratio_):
+            sum_variance += var
+            pca_name = 'pca_{0}'.format(idx)
+            df[pca_name] = x_results[idx]
+            x_names_pca.append(pca_name)
+            if num_vars <= max_num:
+                break
+        print('Explained variance retained: {0:.2f}'.format(sum_variance))
+        print('Number of PCA Fields: {0}'.format(len(x_names_pca)))
+        print('PCA Fields: {0}'.format(x_names_pca))
+        return df, x_names_pca
+    return df, field_names
+
+
+def remove_high_vif(X: pd.DataFrame, max_num: Union[int,float]=None):
+    num_vars = X.shape[1]
+    colnames = X.columns.values
+    if not max_num or max_num == 0:
+        max_num = round(np.power(X.shape[0], 0.3), 0)
+
+    if num_vars > max_num:
+        print('Removing variables with high VIF. New variable qty will be: [{0}]'.format(max_num))
+
+        # from joblib import Parallel, delayed
+        while num_vars > max_num:
+            # vif = Parallel(n_jobs=-1, verbose=-1)(delayed(variance_inflation_factor)(X.loc[:, colnames].values, ix) for ix in range(X.loc[:, colnames].shape[1]))
+            vif = [variance_inflation_factor(X.loc[:, colnames].values, ix) for ix in range(X.loc[:, colnames].shape[1])]
+
+            maxloc = vif.index(max(vif))
+            print('dropping \'' + X.loc[:, colnames].columns[maxloc] + '\' at index: ' + str(maxloc))
+            del colnames[maxloc]
+
+        print('Remaining variables:')
+        print(colnames)
+
+    return X.loc[:, colnames], colnames.tolist()
+
+
+def print_model_results(clf,
+                        x_df: Union[pandas_dataframe_objs + (np.ndarray,)],
+                        y_df: Union[pandas_dataframe_objs + (np.ndarray,)],
+                        model_outputs_dir: str,
+                        selection_limit: float):
+    try:
+        print_data = OrderedDict()
+        print_data['Variable Name'] = x_df.columns.values.tolist()
+        if hasattr(clf, 'coef_'):
+            coef_fld_name = 'Coef.'
+            if isinstance(clf.coef_[0], (tuple, list, np.ndarray)):
+                if clf.coef_.shape[0] == 1:
+                    coefs = fix_np_nan(clf.coef_[0])
+                else:
+                    coefs = fix_np_nan([v[0] for v in clf.coef_])
+            else:
+                coefs = fix_np_nan([v for v in clf.coef_])
+            if isinstance(coefs, (np.ndarray)):
+                coefs = coefs.tolist()
+            elif sparse.issparse(coefs):
+                coefs = coefs.tolist()[-1].data
+
+            coefs = [f'{v:.2E}' for v in coefs]
+            sigmoid_coef = [f'{ft.sigmoid(float(v)):.3f}' for v in coefs]
+            try:
+                exp_coef = [f'{exp(float(v)):.3f}' for v in coefs]
+            except OverflowError:
+                print('Coefficients too large to take the natural log. Skipping.')
+                exp_coef = [f'N/A' for v in coefs]
+                pass
+
+        elif hasattr(clf, 'feature_importances_'):
+            coef_fld_name = 'Feat Imp.'
+            coefs = [f'{v:.1%}' for v in fix_np_nan(clf.feature_importances_).tolist()]
+            sigmoid_coef = [f'N/A' for v in coefs]
+            exp_coef = [f'N/A' for v in coefs]
+        else:
+            raise ValueError('No coef_ or feature_importances_ attribute in this model. Skipping.')
+
+        print("Total Coefficients/Features:  ", len(coefs))
+        print_data[coef_fld_name] = coefs
+        print_data[coef_fld_name + ' (Sigmoid)'] = sigmoid_coef
+        print_data[coef_fld_name + ' (Exp)'] = exp_coef
+
+        if len(np.unique(y_df)) == 2:
+            scores, p_vals = sk_feat_sel.f_classif(x_df, y_df)
+        else:
+            scores, p_vals = sk_feat_sel.f_regression(x_df, y_df, center=False)
+
+        print_data['Score'] = [f'{float(v):.3f}' for v in scores.tolist()]
+        print_data['P-Value'] = [f'{float(v):.4f}' for v in p_vals.tolist()]
+
+        sig_lvls = list()
+        for v in p_vals:
+            signif_str = ''
+            for lvl in (0.1, 0.05, 0.01, 0.001):
+                if float(v) <= lvl:
+                    signif_str += '*'
+            sig_lvls += [signif_str]
+
+        print_data['Signif. Lvl'] = sig_lvls
+
+        if len(set(map(len, print_data.values()))) == 1:
+            all_coefs = pd.DataFrame.from_dict(print_data)
+        else:
+            raise ValueError('Cannot print dataframe with coefficient information.\n'
+                             'All the coefficient value series are not the same length!!!!')
+
+        all_coefs.sort_values('P-Value', ascending=True, inplace=True)
+
+        print(f'Outputting Model Coefficient Information to {model_outputs_dir}')
+        all_coefs_file_name = 'all_coefs'
+        while True:
+            try:
+                all_coefs.to_csv(join(model_outputs_dir, all_coefs_file_name + '.csv'), index=True,
+                                 index_label=['index1'], header=True, encoding='utf_8')
+                del all_coefs_file_name
+                break
+            except PermissionError as e:
+                print(e)
+                all_coefs_file_name += f' ({dt.now().strftime("%Y-%m-%d %H:%M:%S")})'
+                pass
+
+        nonzero_coef_mask = all_coefs[coef_fld_name].str.replace('%', '').astype(float) != 0
+        signif_var_mask = all_coefs['P-Value'].astype(float) <= selection_limit
+        print_coefs = all_coefs.loc[nonzero_coef_mask & signif_var_mask, :]
+
+        print_table = PrettyTable(print_coefs.columns.tolist())
+        for _, r in print_coefs.iterrows():
+            print_table.add_row(r)
+
+        print(print_table.get_string())
+
+        try:
+            with open(join(model_outputs_dir, 'coef_info.txt'), mode='wt', encoding='utf_8') as f:
+                f.writelines(print_table.get_string())
+        except UnicodeDecodeError as e:
+            print(e)
+            pass
+
+    except ValueError as e:
+        print(e)
+        pass

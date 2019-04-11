@@ -11,13 +11,15 @@ import getopt
 import sys
 import inspect
 import shutil
-import itertools
+import math
 import time
+import tensorflow as tf
 from datetime import date
 import platform
 import subprocess
 import importlib
 from re import search as re_search
+from fancyimpute import BiScaler, NuclearNormMinimization, MatrixFactorization, IterativeSVD
 
 global log
 
@@ -174,7 +176,13 @@ def control_dir(dir: str) -> str:
 
 
 def wnet_connect(fullpath, username, password):
-    import win32wnet
+
+    plat = platform.platform()
+    if 'windows' in plat:
+        win32wnet = importlib.import_module('win32wnet')
+    else:
+        raise SystemError("Can't use the win32wnet module on a non-windows platform. ({0})".format(plat))
+
     netresource = win32wnet.NETRESOURCE()
     netresource.lpRemoteName = fullpath
     try:
@@ -196,8 +204,33 @@ def wnet_connect(fullpath, username, password):
             raise err
 
 
-def str_as_header(txt: str, char: str='=') -> str:
-    end_chars = 5
+def reverse_enumerate(l):
+    for index in reversed(range(len(l))):
+        yield index, l[index]
+
+
+def natural_log(x: float) -> float:
+    if x > 0:
+        return math.exp(x)
+    else:
+        return math.exp(-x)
+
+
+def inv_natural_log(x: float) -> float:
+    return math.log(x, math.e)
+
+
+def sigmoid(gamma: float) -> float:
+    if gamma < 0:
+        return 1 - 1/(1 + math.exp(gamma))
+    else:
+        return 1/(1 + math.exp(-gamma))
+
+
+def skflow_rnn_input_fn(x: tf.Tensor) -> list:
+    return tf.split(x, x.shape[1].value, 1)
+
+def str_as_header(txt: str, char: str='=', end_chars: int=5) -> str:
     end_str = char * (end_chars*1 + 1)
     txt = end_str + ' ' + txt + ' ' + end_str
     bookends = char * len(txt)
@@ -248,6 +281,27 @@ def get_arg_response(arg: str, opt: str):
         return True
     else:
         raise ValueError('Wrong argument given [%s] for option %s' % (arg, opt))
+
+
+def impute_if_any_nulls(impute_df: pd.DataFrame, verbose: bool=False):
+    impute_names = impute_df.columns.values.tolist()
+    impute_index = impute_df.index.values
+    for imputer in [BiScaler, NuclearNormMinimization, MatrixFactorization, IterativeSVD]:
+        if impute_df.isnull().any().any():
+            print(f'Imputation: Null values are in the DF. Running imputation using "{imputer.__name__}"')
+            impute_df = imputer(verbose=verbose).fit_transform(impute_df.values)
+            impute_df = pd.DataFrame(data=impute_df, columns=impute_names, index=impute_index)
+        else:
+            break
+    # else:
+    #     print('Imputation: Unable to eliminate all NULL values from the dataframe! FIX THIS!')
+
+    for n in impute_names.copy():
+        if impute_df[n].isnull().any().any():
+            print('Field [{0}] was still empty after imputation! Removing it!'.format(n))
+            impute_names.remove(n)
+
+    return impute_df, impute_names
 
 
 def process_args(args, arglist):
