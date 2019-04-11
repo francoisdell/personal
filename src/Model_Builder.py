@@ -5,15 +5,6 @@ import sys
 if os.path.abspath(os.pardir) not in sys.path:
     sys.path.append(os.path.abspath(os.pardir))
 
-# from PyInstaller import compat
-# mkldir = join(compat.base_prefix, "Library", "bin")
-# binaries = [(join(mkldir, mkl), '') for mkl in os.listdir(mkldir) if mkl.startswith('mkl_')]
-# if not mkldir in os.environ['PATH']:
-#         os.environ['PATH'] = mkldir + os.pathsep + os.environ['PATH']
-# for b in binaries:
-#     if not b[0] in os.environ['PATH']:
-#         os.environ['PATH'] = b[0] + os.pathsep + os.environ['PATH']
-
 from typing import Union
 from math import exp
 import math

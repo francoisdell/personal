@@ -12,7 +12,7 @@ import wbdata
 import bls
 import operator
 import itertools
-from Function_Toolbox import impute_if_any_nulls
+from Function_Toolbox import impute_if_any_nulls, load_env
 from sklearn import feature_selection as sk_feat_sel
 from scipy.stats import logistic
 from sklearn import preprocessing as sk_prep
@@ -216,6 +216,7 @@ class DataSource:
 
     def collect_data(self):
 
+        load_env()
         if isfunction(self.provider):
             if self.code:
                 self.data = self.provider(self.code)
@@ -223,12 +224,12 @@ class DataSource:
                 self.data = self.provider()
 
         elif self.provider == 'fred':
-            fred = Fred(api_key_file='token_fred.txt')
+            fred = Fred(api_key=os.environ['TOKEN_FRED'])
             self.data = fred.get_series(self.code, observation_start=self.start_dt, observation_end=self.end_dt)
 
         elif self.provider == 'eod_hist':
             url = 'https://eodhistoricaldata.com/api/eod/{0}'.format(self.code)
-            params = {'api_token': open('token_eodhist.txt', mode='r').read()}
+            params = {'api_token': os.environ['TOKEN_EODHIST']}
             expire_after = td(days=1).total_seconds()
             session = requests_cache.CachedSession(cache_name='cache', backend='sqlite', expire_after=expire_after)
             r = session.get(url, params=params)
@@ -251,7 +252,7 @@ class DataSource:
 
         elif self.provider == 'quandl':
             self.data = quandl.get(self.code,
-                                   authtoken=open('token_quandl.txt', mode='r').read(),
+                                   authtoken=os.environ['TOKEN_QUANDL'],
                                    collapse="quarterly",
                                    start_date=self.start_dt,
                                    end_date=self.end_dt)['Value']
@@ -260,7 +261,7 @@ class DataSource:
             self.data = bls.get_series([self.code],
                                        startyear=dt.strptime(self.start_dt, '%Y-%m-%d').year,
                                        endyear=dt.strptime(self.end_dt, '%Y-%m-%d').year,
-                                       key=open('token_bls.txt', mode='r').read()
+                                       key=os.environ['TOKEN_BLS']
                                        )
 
         elif self.provider == 'worldbank':
@@ -819,7 +820,7 @@ def calc_equity_alloc(start_dt: str='', end_dt: str='') -> pd.Series:
     if not end_dt:
         end_dt = dt.today().strftime('%Y-%m-%d')
 
-    fred = Fred(api_key_file='token_fred.txt')
+    fred = Fred(api_key=os.environ['TOKEN_FRED'])
     nonfin_biz_equity_liab = fred.get_series('NCBEILQ027S', observation_start=start_dt, observation_end=end_dt)
     nonfin_biz_credit_liab = fred.get_series('BCNSDODNS', observation_start=start_dt, observation_end=end_dt)
     household_nonprofit_credit_liab = fred.get_series('CMDEBT', observation_start=start_dt, observation_end=end_dt)

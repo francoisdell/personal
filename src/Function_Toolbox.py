@@ -1,27 +1,45 @@
+__author__ = 'Andy Mackenzie'
+
 import logging
 import Settings
 from chardet.universaldetector import UniversalDetector
 from contextlib import contextmanager
-import pickle
 import os
 import csv
-import pandas as pd
-import numpy as np
 import getopt
 import sys
 import inspect
+from sqlitedict import SqliteDict
 import shutil
-import math
+import signal
+import requests
 import time
-import tensorflow as tf
-from datetime import date
+from functools import reduce
+import datetime as dt
+from datetime import date, timedelta
+import pandas as pd
+import re
+import calendar as cal
 import platform
 import subprocess
 import importlib
+import pickle
 from re import search as re_search
-from fancyimpute import BiScaler, NuclearNormMinimization, MatrixFactorization, IterativeSVD
+import math
+import json
+from typing import Union
+import dotenv
 
-global log
+preferred_csv_dialect = csv.excel
+preferred_csv_dialect.quoting = csv.QUOTE_MINIMAL
+preferred_csv_dialect.doublequote = True
+preferred_csv_dialect.quotechar = '"'
+preferred_csv_dialect.lineterminator = '\n'
+
+
+def load_env():
+    dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
+    dotenv.load_dotenv(dotenv_path)
 
 
 def create_logger(report_name: str):
@@ -34,7 +52,7 @@ def create_logger(report_name: str):
     # create a logger
     try:
         log = logging.getLogger(get_report_name())
-    except:
+    except Exception as e:
         log = logging.getLogger(get_exec_file(whole_path=False))
 
     log.setLevel(logging.INFO)
@@ -57,7 +75,7 @@ def get_logger():
         if log:
             return log
         else:
-            raise Exception()
+            raise Exception('Log variable does not exist yet.')
     except:
         try:
             create_logger(get_report_name())
@@ -93,10 +111,10 @@ def get_exec_file(whole_path: bool = False):
 
 
 def get_report_name() -> str:
-    return importlib.import_module(get_exec_file()).__report_name__
+    return importlib.import_module(get_exec_file()).__file__.split('/')[-1].split('.')[0]
 
 
-def get_report_owner() -> str:
+def get_author() -> str:
     return importlib.import_module(get_exec_file()).__author__
 
 
@@ -154,7 +172,7 @@ def normalize_csv(csv_file, new_csv_file, encoding: str = None):
         with open(new_csv_file, mode='w', encoding=encoding) as file2:
             data_writer = csv.writer(file2, dialect=dialect)
             data_writer.writerows(data_iter)
-
+    return dialect
 
 def control_dir(dir: str) -> str:
     if "Windows" in platform.architecture()[1]:
@@ -204,11 +222,6 @@ def wnet_connect(fullpath, username, password):
             raise err
 
 
-def reverse_enumerate(l):
-    for index in reversed(range(len(l))):
-        yield index, l[index]
-
-
 def natural_log(x: float) -> float:
     if x > 0:
         return math.exp(x)
@@ -227,12 +240,47 @@ def sigmoid(gamma: float) -> float:
         return 1/(1 + math.exp(-gamma))
 
 
-def skflow_rnn_input_fn(x: tf.Tensor) -> list:
-    return tf.split(x, x.shape[1].value, 1)
+def deep_get(dictionary: Union[dict, SqliteDict], keys: str, default=None) -> dict:
+    return reduce(lambda d, key: d.get(key, default) if hasattr(d, 'get') else default,
+                  keys.split("/"),
+                  dictionary)
+
+
+def convert_to_ts(val: int) -> dt.datetime:
+    if isinstance(val, dt.datetime):
+        return val
+    try:
+        val = str(int(val))
+        if len(val) > 10:
+            val = val[:10]
+        val = dt.datetime.fromtimestamp(int(val))
+    except Exception as e:
+        try:
+            val = pd.to_datetime(val)
+        except Exception as e:
+            return None
+    return val
+
+
+class timeout:
+    def __init__(self, seconds=1, error_message='Timeout'):
+        self.seconds = seconds
+        self.error_message = error_message
+
+    def handle_timeout(self, signum, frame):
+        raise TimeoutError(self.error_message)
+
+    def __enter__(self):
+        signal.signal(signal.SIGALRM, self.handle_timeout)
+        signal.alarm(self.seconds)
+
+    def __exit__(self, type, value, traceback):
+        signal.alarm(0)
+
 
 def str_as_header(txt: str, char: str='=', end_chars: int=5) -> str:
-    end_str = char * (end_chars*1 + 1)
-    txt = end_str + ' ' + txt + ' ' + end_str
+    end_str = char * (end_chars + 1)
+    txt = '{0} {1} {0}'.format(end_str, txt)
     bookends = char * len(txt)
     txt = '\n{0}\n{1}\n{0}'.format(bookends, txt)
     return txt
@@ -254,11 +302,24 @@ def regex_get_item(regex: str, value: str, item: int, ignore_errors: bool = True
             raise e
 
 
+def reverse_enumerate(l):
+    for index in reversed(range(len(l))):
+        yield index, l[index]
+
+
 def prepend_prefix(prefix: str, name: str) -> str:
     if isinstance(prefix, str) \
             and not prefix == name[:len(prefix)]:
         name = prefix + name
     return name
+
+
+def month_diff(start_dt: dt.datetime, end_dt: dt.datetime) -> float:
+    d1_daysinmonth = cal.monthrange(end_dt.year, end_dt.month)[1]
+    d2_daysinmonth = cal.monthrange(start_dt.year, start_dt.month)[1]
+    diff = (12 * end_dt.year + end_dt.month + (end_dt.day / d1_daysinmonth)) - \
+           (12 * start_dt.year + start_dt.month + (start_dt.day / d2_daysinmonth))
+    return diff
 
 
 def get_encoding_type(current_file: str):
@@ -274,6 +335,421 @@ def get_encoding_type(current_file: str):
     return detector.result['encoding']
 
 
+def timer_hms(td: timedelta) -> str:
+    m_elapsed, s_elapsed = divmod(td.seconds, 60)
+    h_elapsed, m_elapsed = divmod(m_elapsed, 60)
+    return "%d:%02d:%02d" % (h_elapsed, m_elapsed, s_elapsed)
+
+
+def print_status_bar(numerator, denominator, len: int = 25, include_pct: bool = True, include_num: bool = True,
+                     start_time: dt.datetime = None):
+
+    # assert numerator <= denominator
+    pct = numerator/denominator
+    hashtags = math.floor(pct*len)
+    dashes = len - hashtags
+    bar = 'Progress: '
+    if include_pct:
+        bar += '{0:.1f}% '.format(pct*100)
+    if include_num:
+        bar += f'({numerator}/{denominator}) '
+    bar += '[{0}]'.format('#' * hashtags + '-' * dashes)
+    if start_time:
+        if pct > 0:
+            elapsed_time = dt.datetime.now() - start_time
+            m_elapsed, s_elapsed = divmod(elapsed_time.seconds, 60)
+            h_elapsed, m_elapsed = divmod(m_elapsed, 60)
+            remaining_time = timedelta(seconds=elapsed_time.seconds * ((1-pct)/pct))
+            m_remaining, s_remaining = divmod(remaining_time.seconds, 60)
+            h_remaining, m_remaining = divmod(m_remaining, 60)
+            bar += ' [Elapsed: {0}] [Remaining: {1}]'\
+                .format("%d:%02d:%02d" % (h_elapsed, m_elapsed, s_elapsed),
+                        "%d:%02d:%02d" % (h_remaining, m_remaining, s_remaining))
+
+    print(f'\r{bar}', end='' if numerator < denominator else '\n')
+
+
+def df_agg_from_date(df: pd.DataFrame, group_field, agg_fields, ts_field, joindate_field: str = None,
+                     lastxdays: Union[bool, list] = False, firstxdays: Union[bool, list] = False, aggregate: str = 'mean',
+                     incl_agg_in_name: Union[bool, str] = True, retain_fields: list = None, presignup: bool = True,
+                     postsignup: bool = True, alltime = True, ts_cutoff_field: str = '', curr_dt: dt.datetime = None,
+                     include_preceding_period: bool = False, include_following_period: bool = False):
+
+    if not curr_dt:
+        curr_dt = df[ts_field].max()  # dt.now()
+
+    new_df = pd.DataFrame(index=df[group_field].unique())
+    new_df.index.name = group_field
+    suffix = str()
+    if isinstance(incl_agg_in_name, str):
+        suffix += f'_{incl_agg_in_name}'
+    elif incl_agg_in_name:
+         suffix += f'_{aggregate}'
+
+    for fld in agg_fields:
+        if alltime:
+            new_df[f'alltime_{fld}{suffix}'] = df.groupby(by=group_field)[fld].aggregate(aggregate).fillna(0)
+
+        if lastxdays:
+            time_periods = dict()
+            if lastxdays is True:
+                lastxdays = [30, 60, 90]
+            for days in lastxdays:
+                cutoff_dt = curr_dt - timedelta(days=days)
+                time_periods[f'last{days}day_{fld}{suffix}'] = (cutoff_dt, curr_dt)
+                if include_preceding_period:
+                    preceding_cutoff_dt = cutoff_dt - timedelta(days=days)
+                    time_periods[f'last{days}day_preceding{days}_{fld}{suffix}'] = (preceding_cutoff_dt, cutoff_dt)
+
+            for field_name, (start_dt, end_dt) in time_periods.items():
+                if ts_cutoff_field:
+                    cutoff_series = df[ts_cutoff_field].apply(lambda r: coalesce([r, end_dt]))
+                    # take any row with values such that the start date is before the latest date (curr_dr)
+                    # and the end date is after the beginning date (start_dt). You're essentially ensuring that
+                    # the datapoints fall within the last-x-day time period by checking that they intersect.
+                    df_slice = df.loc[(end_dt > df[ts_field]) & (start_dt <= cutoff_series), :]
+                    df_slice['agg_proportion'] = df_slice.apply(
+                        lambda r: min(
+                            1.0,
+                            (min(end_dt, r[ts_cutoff_field]) - max(r[ts_field], start_dt)).total_seconds() /
+                            (coalesce([r[ts_cutoff_field], end_dt])-r[ts_field]).total_seconds()
+                            ),
+                        axis=1)
+                    df_slice[fld] = df_slice.apply(lambda r: r[fld] * r['agg_proportion'], axis=1)
+                elif aggregate in ('last', 'first'):
+                    df_slice = df.loc[(end_dt > df[ts_field]), :]
+                else:
+                    df_slice = df.loc[(end_dt > df[ts_field]) & (start_dt <= df[ts_field]), :]
+
+                new_df[field_name] = df_slice.groupby(by=group_field)[fld].aggregate(aggregate).fillna(0)
+
+        if joindate_field:
+            join_df = df.loc[~df[joindate_field].isnull(), :]
+            join_df[joindate_field] = pd.to_datetime(join_df[joindate_field])
+            join_df[ts_field] = pd.to_datetime(join_df[ts_field])
+
+            post_join_records = (join_df[ts_field] >= join_df[joindate_field])
+            if presignup:
+                pre_join_records = ~post_join_records
+                new_df[f'presignup_{fld}{suffix}'] = join_df.loc[(pre_join_records), :]\
+                    .groupby(by=group_field)[fld].aggregate(aggregate).fillna(0)
+            if postsignup:
+                if aggregate in ('last', 'first'):
+                    new_df[f'postsignup_{fld}{suffix}'] = join_df\
+                        .groupby(by=group_field)[fld].aggregate(aggregate).fillna(0)
+                else:
+                    new_df[f'postsignup_{fld}{suffix}'] = join_df.loc[(post_join_records), :]\
+                        .groupby(by=group_field)[fld].aggregate(aggregate).fillna(0)
+
+            if firstxdays:
+                time_periods = dict()
+                if firstxdays is True:
+                    firstxdays = [30, 60, 90]
+                for days in firstxdays:
+                    time_periods[f'first{days}day_{fld}{suffix}'] = (0, days)
+                    if include_preceding_period:
+                        time_periods[f'first{days}day_following{days}_{fld}{suffix}'] = (days, days*2)
+
+                for field_name, (start_days, end_days) in time_periods.items():
+                    join_df['end_dt'] = join_df[joindate_field] + timedelta(days=end_days)
+                    join_df['start_dt'] = join_df[joindate_field] + timedelta(days=start_days)
+                    if aggregate in ('last', 'first'):
+                        df_slice = join_df.loc[(join_df[ts_field] <= join_df['end_dt'])
+                                & (join_df[ts_field] > join_df['start_dt']), :]
+                    else:
+                        df_slice = join_df.loc[(post_join_records) & (join_df[ts_field] <= join_df['end_dt'])
+                                & (join_df[ts_field] > join_df['start_dt']), :]
+
+                    if ts_cutoff_field:
+                        df_slice['agg_proportion'] = df_slice.apply(
+                            lambda r: min(
+                                1.0,
+                                (min(r['end_dt'], r[ts_cutoff_field]) - max(r[ts_field], r['start_dt'])).total_seconds() /
+                                (coalesce([r[ts_cutoff_field], curr_dt]) - r[ts_field]).total_seconds()
+                                if (coalesce([r[ts_cutoff_field], curr_dt]) - r[ts_field]).total_seconds() > 0 else 0),
+                            axis=1)
+                        df_slice[fld] = df_slice.apply(lambda r: r[fld] * r['agg_proportion'], axis=1)
+                    new_df[field_name] = df_slice.groupby(by=group_field)[fld].aggregate(aggregate).fillna(0)
+
+    if retain_fields:
+        retained = df.set_index(group_field).loc[:, retain_fields].drop_duplicates()
+        new_df = new_df.merge(retained, left_index=True, right_index=True, how='left')
+    return new_df
+
+
+def get_refresh_date_key(file_addr):
+    file_name = os.path.basename(file_addr)
+    refresh_string_suffix = '_last_modified'
+    return file_name + refresh_string_suffix
+
+
+def refresh_required(min_date: dt.datetime, file_addr: str, session_info: [dict, SqliteDict] = {}) -> bool:
+
+    res = False
+    last_modified_key = get_refresh_date_key(file_addr)
+
+    if last_modified_key in session_info:
+        if session_info[last_modified_key] < min_date:
+            res = True
+
+    elif os.path.exists(file_addr):
+        file_last_mod_dt = convert_to_ts(os.stat(file_addr).st_mtime)
+        if file_last_mod_dt < min_date:
+            res = True
+        session_info[last_modified_key] = file_last_mod_dt
+
+    else:  # If the file doesn't exist AND the session_info argument wasn't passed, then the data must be refreshed
+        res = True
+
+    print('Refresh{0} required for data in file {1}'.format(' IS' if res else ' NOT', os.path.basename(file_addr)))
+    return res
+
+
+def wait_until_biz_hours():
+    now = dt.datetime.now()
+    end_biz_hours = now.replace(hour=20, minute=0, second=0, microsecond=0)
+    start_biz_hours = now.replace(hour=8, minute=0, second=0, microsecond=0)
+    while True:
+        now = dt.datetime.now()
+        if start_biz_hours <= now < end_biz_hours:
+            time_remaining = timer_hms(end_biz_hours - dt.datetime.now())
+            print(f'\rIt is currently business hours in the USA (8AM-8PM EST). '
+                  f'{time_remaining} remaining until we can run the query', end='')
+            time.sleep(1)
+        else:
+            end_biz_hours = now.replace(hour=20, minute=0, second=0, microsecond=0)
+            start_biz_hours = now.replace(hour=8, minute=0, second=0, microsecond=0)
+            if not (start_biz_hours <= now < end_biz_hours):
+                print('\nOutside biz hours! Ready to go!')
+                break
+    return
+
+
+
+def dedupe_and_check_unique(df: pd.DataFrame, fields: Union[tuple, list]=tuple()):
+    df.drop_duplicates(inplace=True)
+    for fld in fields:
+        if df[fld].shape != df[fld].unique().shape:
+            err_str = f'Non-unique field [{fld}] found in DataFrame!'
+            print(err_str)
+            print(df[fld].value_counts(sort=True, ascending=False))
+            raise ValueError(err_str)
+
+
+def get_financial_metrics(df: pd.DataFrame, prefix: str):
+    cost = '_est_total_cost'
+    margin = '_est_total_margin'
+    margin_pct = '_est_total_margin_pct'
+    csm = '_natero_est_csm_cost'
+    css = '_est_css_cost'
+    ser = '_est_server_cost'
+    rev = '_revenue'
+    margin_neg = '_est_negative_margin_flag'
+
+    if all(fld in df.columns for fld in (f'{prefix}{rev}',f'{prefix}{css}', f'{prefix}{csm}', f'{prefix}{ser}')):
+        df[f'{prefix}{cost}'] = df[f'{prefix}{css}'].fillna(0.0) + \
+                                df[f'{prefix}{csm}'].fillna(0.0) + \
+                                df[f'{prefix}{ser}'].fillna(0.0)
+        df[f'{prefix}{margin}'] = df[f'{prefix}{rev}'] - df[f'{prefix}{cost}']
+        df[f'{prefix}{margin_pct}'] = df[f'{prefix}{margin}'] / df[f'{prefix}{rev}']
+        df[f'{prefix}{margin_neg}'] = df[f'{prefix}{margin}'] < 0
+
+    return df
+
+
+def coalesce(vals: Union[list, tuple], addl_null_vals: Union[list, tuple]=tuple()):
+    for v in vals:
+        if not (pd.isna(v) or v in addl_null_vals):
+            return v
+    else:
+        return None
+
+
+def merge_and_drop(df1: pd.DataFrame, df2: pd.DataFrame, **kwargs):
+    df1 = pd.merge(df1, df2, suffixes=('', '_drop'), **kwargs)
+    drop_cols = [c for c in df1.columns.tolist() if '_drop' in c]
+    return df1.drop(columns=drop_cols, axis=1)
+
+
+def get_hscout_token() -> str:
+    with requests.session() as s:
+        res = s.post('https://api.helpscout.net/v2/oauth2/token',
+                     data={'grant_type': 'client_credentials',
+                           'client_id': f'{os.environ["HELPSCOUT_APP_ID"]}',
+                           'client_secret': f'{os.environ["HELPSCOUT_APP_SECRET"]}'
+                           }
+                     ).json()['access_token']
+    return res
+
+
+def parse_mau(plan_desc: str) -> Union[int, None]:
+    plan_desc = plan_desc.lower()
+    if 'hobby' in plan_desc:
+        return 250
+    elif 'bootstrap' in plan_desc:
+        return 1000
+    elif 'startup' in plan_desc:
+        return 1000
+    elif 'growth' in plan_desc:
+        return 20000
+    elif '999permonth' in plan_desc:
+        return 25000
+    elif 'business' in plan_desc:
+        return 50000
+    else:
+        try:
+            mau = re.search('-\s([,0-9]+)\smau.*', plan_desc).group(1)
+            return int(mau.replace(',',''))
+        except (IndexError, AttributeError):
+            return None
+
+
+def to_pickle(file_addr: str, obj: object, print_result: bool=True):
+    with open(file_addr, mode='wb') as file_obj:
+        pickle.dump(obj, file_obj)
+        if print_result:
+            print(f'Dumped data to Pickle file: {file_addr}')
+
+
+def from_pickle(file_addr: str, print_result: bool=True) -> object:
+    with open(file_addr, mode='rb') as file_obj:
+        obj = pickle.load(file_obj)
+        if print_result:
+            print(f'Loaded data from Pickle file: {file_addr}')
+        return obj
+
+
+def open_shelf(file_name: str, new: bool = False, raise_errors: bool = True, autocommit: bool = True) -> SqliteDict:
+    try:
+        sld = SqliteDict(file_name, autocommit=autocommit)
+        if new:
+            print('Deleting old shelf file and creating a new one.')
+            sld.clear()
+    except Exception as e:
+        print(e)
+        if raise_errors:
+            raise e
+        print('Error during shelf open action. Since raise_errors is false, starting from a new file.')
+        sld = open_shelf(file_name, new=True, raise_errors=True)
+    return sld
+
+
+# Modify a file by renaming it and copying it to a new location,
+# in this case, the //data folder in the base directory for this report
+def convert_file(orig_file, new_file, encoding):
+
+    csv.field_size_limit(sys.maxsize)
+    if orig_file == new_file:
+        return orig_file
+    print_and_log("Renaming: [%s] to [%s]" % (orig_file, new_file), 'info')
+    retries = 3
+    while True:
+        try:
+            if os.path.exists(new_file):
+                os.remove(new_file)
+            break
+        except PermissionError:
+            if retries > 0:
+                retries -= 1
+                time.sleep(3)
+                pass
+            else:
+                print_and_log("Unable to delete existing file")
+                raise
+    try:
+        with open(orig_file, mode='r', encoding=encoding) as file:
+            dialect = csv.Sniffer().sniff(file.readline())
+            dialect.doublequote = True
+            data_iter = csv.reader(file, dialect=dialect)
+            file.seek(0)
+            if encoding.upper().replace('-', '').replace('_', '') in ('UTF8', 'LATIN1', 'CP1252'):
+                dialect = csv.excel
+            else:
+                dialect = csv.excel_tab
+            dialect.quoting = csv.QUOTE_MINIMAL
+            dialect.doublequote = True
+            # dialect.delimiter = '\t'
+            dialect.quotechar = '"'
+            dialect.lineterminator = '\n'
+            with open(new_file, mode='w', encoding=encoding) as file2:
+                data_writer = csv.writer(file2, dialect=dialect)
+                data_writer.writerows(data_iter)
+
+        # shutil.move(orig_file, new_file)
+        # print("Moved to: %s" % download_dir)
+    # except PermissionError:
+    #     shutil.copy2(orig_file, new_file)
+    #     print("Copied to: %s" % download_dir)
+    #     pass
+    except FileNotFoundError as e:
+        print_and_log("shutil.move failed. WTF?!?!?")
+        print_and_log(e)
+
+    return new_file
+
+
+def create_email_message(sender: str, to: list, subject: str, message_text: str, file):
+    """Create a message for an email.
+
+    Args:
+    sender: Email address of the sender.
+    to: Email address of the receiver.
+    subject: The subject of the email message.
+    message_text: The text of the email message.
+    file: The path to the file to be attached.
+
+    Returns:
+    An object containing a base64url encoded email object.
+    """
+
+    from os.path import basename
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.image import MIMEImage
+    from email.mime.base import MIMEBase
+    from email.mime.audio import MIMEAudio
+    import mimetypes
+
+    message = MIMEMultipart()
+    message['to'] = ", ".join(to)
+    message['from'] = sender
+    message['subject'] = subject
+
+    msg = MIMEText(message_text)
+    message.attach(msg)
+
+    if file:
+        content_type, encoding = mimetypes.guess_type(file)
+
+        if content_type is None or encoding is not None:
+            content_type = 'application/octet-stream'
+        main_type, sub_type = content_type.split('/', 1)
+
+        if main_type == 'text':
+            fp = open(file, 'rt')
+            msg = MIMEText(fp.read(), _subtype=sub_type)
+            fp.close()
+        elif main_type == 'image':
+            fp = open(file, 'rb')
+            msg = MIMEImage(fp.read(), _subtype=sub_type)
+            fp.close()
+        elif main_type == 'audio':
+            fp = open(file, 'rb')
+            msg = MIMEAudio(fp.read(), _subtype=sub_type)
+            fp.close()
+        else:
+            fp = open(file, 'rb')
+            msg = MIMEBase(main_type, sub_type)
+            msg.set_payload(fp.read())
+            fp.close()
+
+        filename = basename(file)
+        msg.add_header('Content-Disposition', 'attachment', filename=filename)
+        message.attach(msg)
+
+    return message.as_string()
+
+
 def get_arg_response(arg: str, opt: str):
     if arg in ('f', 'false'):
         return False
@@ -283,28 +759,18 @@ def get_arg_response(arg: str, opt: str):
         raise ValueError('Wrong argument given [%s] for option %s' % (arg, opt))
 
 
-def impute_if_any_nulls(impute_df: pd.DataFrame, verbose: bool=False):
-    impute_names = impute_df.columns.values.tolist()
-    impute_index = impute_df.index.values
-    for imputer in [BiScaler, NuclearNormMinimization, MatrixFactorization, IterativeSVD]:
-        if impute_df.isnull().any().any():
-            print(f'Imputation: Null values are in the DF. Running imputation using "{imputer.__name__}"')
-            impute_df = imputer(verbose=verbose).fit_transform(impute_df.values)
-            impute_df = pd.DataFrame(data=impute_df, columns=impute_names, index=impute_index)
-        else:
-            break
-    # else:
-    #     print('Imputation: Unable to eliminate all NULL values from the dataframe! FIX THIS!')
+class ArgDef:
+    def __init__(self, long_form: str, short_form: str, default_val, possible_vals: list):
+        self.long_form = long_form
+        self.short_form = short_form
+        self.default_val = default_val
+        self.possible_vals = possible_vals
 
-    for n in impute_names.copy():
-        if impute_df[n].isnull().any().any():
-            print('Field [{0}] was still empty after imputation! Removing it!'.format(n))
-            impute_names.remove(n)
-
-    return impute_df, impute_names
+    def __iter__(self) -> tuple:
+        return self.long_form, self.short_form, self.default_val, self.possible_vals
 
 
-def process_args(args, arglist):
+def process_args(args: Union[tuple, list], arglist: Union[tuple, list]) -> list:
     if len(args) > 1:
         if args[1:][0] == '-h':
             print("You may call this file with any of the following arguments:")
@@ -507,159 +973,37 @@ class TabCmd(object):
         self._execute_command(command)
 
 
-class XML_Query:
-    def __init__(self, prefix: str,
-                 tags_to_traverse: list,
-                 tags_to_avoid: list = [],
-                 tags_to_skip: list = [],
-                 folder: str = None,
-                 specific_tags: list = [],
-                 skip_all_child_nodes: bool = False,
-                 ):
 
-        from DataDelivery import XML_Parser
-
-        self.prefix = prefix
-        self.df_dict = dict()
-        self.tags_to_traverse = tags_to_traverse
-        self.tags_to_avoid = tags_to_avoid
-        self.tags_to_skip = tags_to_skip
-        self.specific_tags = specific_tags
-        self.skip_all_child_nodes = skip_all_child_nodes
-        self.dialect = csv.excel
-        self.dialect.lineterminator = '\n'
-        if not folder:
-            try:
-                s = Settings.Settings(get_report_name())
-                folder = s.get_report_data_dir()
-            except AttributeError as e:
-                s = Settings.Settings('default')
-                folder = s.get_default_data_dir()
-        self.pickle_file = folder + prefix + '.p'
-        self.columns = list()
-        self.parser = XML_Parser.Parser()
-
-    def add_df(self, sn: str, df: pd.DataFrame):
-        self.df_dict[sn] = df
-
-    def add_file_addr(self, file_addr: str):
-        self.file_addr = file_addr
-        self.first_pickle_write = True
-        os.makedirs(os.path.dirname(self.file_addr), exist_ok=True)
-
-    def set_pickle(self, df: pd.DataFrame, reset_cols: bool = False):
-        with open(self.pickle_file, mode='wb') as f:
-            pickle.dump(df, f)
-            self.first_pickle_write = True
-            if reset_cols:
-                self.columns = df.columns.values
-
-    def add_to_pickle(self, df: pd.DataFrame, mode: str = 'truncate'):
-
-        [self.columns.append(c) for c in list(df.columns) if c not in self.columns]
-        if mode == 'truncate' and self.first_pickle_write:
-            with open(self.pickle_file, mode='wb') as f:
-                pickle.dump(df, f)
-                self.first_pickle_write = False
-        elif mode == 'append' or (mode == 'truncate' and not self.first_pickle_write):
-            with open(self.pickle_file, mode='ab') as f:
-                pickle.dump(df, f)
+def impute_if_any_nulls(impute_df: pd.DataFrame, verbose: bool=False):
+    from fancyimpute import BiScaler, NuclearNormMinimization, MatrixFactorization, IterativeSVD
+    impute_names = impute_df.columns.values.tolist()
+    impute_index = impute_df.index.values
+    for imputer in [BiScaler, NuclearNormMinimization, MatrixFactorization, IterativeSVD]:
+        if impute_df.isnull().any().any():
+            print(f'Imputation: Null values are in the DF. Running imputation using "{imputer.__name__}"')
+            impute_df = imputer(verbose=verbose).fit_transform(impute_df.values)
+            impute_df = pd.DataFrame(data=impute_df, columns=impute_names, index=impute_index)
         else:
-            raise ValueError('Unsure what to do with the current Dataframe. Check the code or your mode setting.')
+            break
+    # else:
+    #     print('Imputation: Unable to eliminate all NULL values from the dataframe! FIX THIS!')
 
-    def to_df(self, root):
-        df = self.parser.xmlToDF(root, self.tags_to_traverse, self.tags_to_avoid, self.tags_to_skip,
-                                 self.specific_tags, self.skip_all_child_nodes)
-        return df
+    for n in impute_names.copy():
+        if impute_df[n].isnull().any().any():
+            print('Field [{0}] was still empty after imputation! Removing it!'.format(n))
+            impute_names.remove(n)
 
-    def get_df(self, remove_fields: list = None, delete_after: bool = True):
-        first_write = True
-        df = pd.DataFrame()
+    return impute_df, impute_names
 
-        if not self.columns:
-            self.columns = set()
-            for df in self.pickle_loader():
-                self.columns.update(df.columns)
-            self.columns = list(self.columns)
 
-        try:
-            for qty, temp_df in enumerate(self.pickle_loader()):
-                # df_cols = list(temp_df.columns)
-                # for c in self.columns:
-                #     if c not in df_cols:
-                #         df[c] = np.nan
-                # temp_df = temp_df[self.columns]
-                # if first_write:
-                #     df = temp_df
-                #     first_write = False
-                # else:
-                #     df = df.append(temp_df, ignore_index=True)
+# if __name__ == '__main__':
+#     load_env()
+#     t = get_hscout_token()
+#     print(t)
 
-                if first_write:
-                    df = temp_df
-                    first_write = False
-                else:
-                    df = pd.concat([df, temp_df], axis=0, ignore_index=True)
 
-        except (pickle.UnpicklingError):
-            print('[%s] Unpickling Error. Number of objects unpickled: %s' % (self.prefix, qty))
-            pass
-
-        except (FileNotFoundError):
-            print('[{0}] No data found for the XML query constraints'.format(self.prefix))
-            pass
-
-        # df = df[self.columns]
-        if delete_after:
-            try:
-                os.remove(self.pickle_file)
-            except FileNotFoundError:
-                pass
-
-        if remove_fields:
-            df.drop(remove_fields, errors='ignore', inplace=True, axis=1)
-        return df
-
-    def to_csv(self, mode: str = 'truncate', remove_fields: list = None, delete_after: bool = True):
-        first_write = True
-        try:
-            for qty, df in enumerate(self.pickle_loader()):
-                if remove_fields:
-                    df.drop(remove_fields, errors='ignore', inplace=True, axis=1)
-                df_cols = list(df.columns)
-                for c in self.columns:
-                    if c not in df_cols:
-                        df[c] = np.nan
-                df = df[self.columns]
-                if mode == 'truncate' and first_write:
-                    df.to_csv(self.file_addr, header=True, mode='w', index=False, encoding='utf_8')
-                    first_write = False
-                elif mode == 'append' or (mode == 'truncate' and not first_write):
-                    df.to_csv(self.file_addr, header=False, mode='a', index=False, encoding='utf_8')
-
-        except (pickle.UnpicklingError):
-            print('[%s] Unpickling Error. Number of objects unpickled: %s' % (self.prefix, qty))
-            pass
-        except (FileNotFoundError):
-            print('[{0}] No data found for the XML query constraints'.format(self.prefix))
-            pass
-
-        if delete_after:
-            try:
-                os.remove(self.pickle_file)
-            except FileNotFoundError:
-                pass
-
-    def get_csv(self):
-        return pd.read_csv(self.file_addr, index_col=False, encoding='utf_8')
-
-    def pickle_loader(self):
-        num_objs = 0
-        try:
-            with open(self.pickle_file, mode='rb') as f:
-                while True:
-                    yield pickle.load(f)
-                    num_objs += 1
-        except EOFError:
-            print('[%s] Number of objects unpickled: %s' % (self.prefix, num_objs))
-            pass
+if __name__ == '__main__':
+    d = json.loads(open('tags.json').read())
+    print(d['tags'])
+    df = pd.DataFrame(d['tags'])
+    df.to_csv('tags.csv')
