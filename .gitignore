@@ -9,11 +9,10 @@ Models/*
 pip-selfcheck.json
 xgboost/
 Analytics Reports/
-bin/*
-*/*.pyc*
+bin
+*.pyc
 *.txt
-src/.env
 *.env
-*/*.env
 *.iml
 *.xml
+*.p
